@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 from importlib.machinery import FrozenImporter
 import akshare as ak
 from LocalCache import LocalCache as lc
