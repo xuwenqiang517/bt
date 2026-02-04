@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date,datetime
 import akshare as ak
 from regex import P
 from LocalCache import LocalCache as lc
@@ -10,13 +10,13 @@ from tqdm import tqdm
 class StockData:
     def __init__(self):
         today=date.today().strftime("%Y%m%d")
+        if datetime.now().hour < 15:
+            today=(date.today()-pd.Timedelta(days=1)).strftime("%Y%m%d")
         cache=lc()
-        stock_list=self.get_stock_list(today,cache)
-        print(stock_list)
-        stock_data=self.get_stock_data(stock_list,today,cache)
-        print(len(stock_data))
-        print(stock_data["600000"])
-        
+        stock_list_df=self.get_stock_list(today,cache)
+        stock_data_df=self.get_stock_data(stock_list_df,today,cache)
+        # print(len(stock_data_df))
+        # print(stock_data_df.tail())
     
     def get_stock_list(self,today,cache):
         cache_file_name="stock_list_"+today
@@ -43,30 +43,34 @@ class StockData:
         return stock_list
 
     def get_stock_data(self,stock_list,today,cache):
-        cache_file_name="all_stock_data_"+today
-        cache.clean(prefix="all_stock_data_",ignore=[cache_file_name])
-        stock_data = cache.get(cache_file_name)
+        all_cache_file_name="all_stock_data_"+today
+        cache.clean(prefix="all_stock_data_",ignore=[all_cache_file_name])
+        stock_data = cache.get(all_cache_file_name)
 
         if stock_data is None:
-            stock_data = {}
+            print(f"缓存取股票数据 {all_cache_file_name} 失败，尝试从_tx获取")
+            stock_data = pd.DataFrame()
             for index, row in tqdm(stock_list.iterrows(), total=len(stock_list), desc="Fetching stock data"):
                 code = row["code"]
                 try:
                     cache_file_name=f"stock_data_{code}_{today}"
-                    cache.clean(prefix=f"stock_data_{code}_",ignore=[cache_file_name])
                     df=cache.get(cache_file_name)
                     if df is None or df.empty:
+                        # print(f"缓存取股票数据 {code} 失败，尝试从_tx获取")
                         df = self.get_stock_data_tx(code)
                         if df is not None and not df.empty:
                             cache.set(cache_file_name, df)
-                            stock_data[code] = df
+                    if df is not None and not df.empty:
+                        stock_data = pd.concat([stock_data, df], ignore_index=True)
                 except Exception as e:
                     print(f"Error fetching data for {code}: {e}")
+            cache.set(all_cache_file_name,stock_data)
+            cache.clean(prefix="stock_data_")
         return stock_data
 
 
     def get_stock_data_tx(self,code) -> pd.DataFrame:
-        print(f"获取股票数据 {code}")
+        # print(f"获取股票数据 {code}")
         market = "sh" if code.startswith("6") else "sz"
         url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={market}{code},day,,,640,qfq,1"
         headers = {"Referer": "http://finance.qq.com/mp/"}
@@ -74,7 +78,7 @@ class StockData:
         data = resp.json()
         if data.get("code") == 0 and data.get("data") and data["data"].get(f"{market}{code}"):
             items = data["data"][f"{market}{code}"].get("qfqday", [])
-            print(f"获取股票数据 {code} 成功，共 {len(items)} 条数据")
+            # print(f"获取股票数据 {code} 成功，共 {len(items)} 条数据")
             items = [row[:6] for row in items]
             df = pd.DataFrame(items, columns=["date", "open", "close", "high", "low", "volume"])
             df["code"] = code
@@ -90,7 +94,7 @@ class StockData:
             df = self.calc_tech(df)
             return df
         else:
-            print(f"获取股票数据 {market}{code} 失败 data:{data}")
+            # print(f"获取股票数据 {market}{code} 失败 data:{data}")
             return pd.DataFrame()
         
     
