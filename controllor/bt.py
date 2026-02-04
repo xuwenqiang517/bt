@@ -1,49 +1,47 @@
-import backtrader as bt
-import os
-# Create a subclass of Strategy to define the indicators and logic
+class Strategy:
+    def __init__(self, param):
+        self.param = param
 
-class SmaCross(bt.Strategy):
-    # list of parameters which are configurable for the strategy
-    params = dict(
-        pfast=10,  # period for the fast moving average
-        pslow=30   # period for the slow moving average
-    )
+    def pick(self):
+        pass
 
+    def buy(self):
+        pass
+
+    def sell(self):
+        pass
+
+# class up_strategy(Strategy):
+#     def __init__(self, param):
+#         super().__init__(param)
+
+#     def pick(self):
+        
+
+#     def buy(self):
+        
+
+#     def sell(self):
+        
+
+
+
+
+class Chain:
     def __init__(self):
-        sma1 = bt.ind.SMA(period=self.p.pfast)  # fast moving average
-        sma2 = bt.ind.SMA(period=self.p.pslow)  # slow moving average
-        self.crossover = bt.ind.CrossOver(sma1, sma2)  # crossover signal
+        self.strategies = []
 
-    def next(self):
-        if not self.position:  # not in the market
-            if self.crossover > 0:  # if fast crosses slow to the upside
-                self.buy()  # enter long
+    def add_strategy(self, strategy):
+        self.strategies.append(strategy)
 
-        elif self.crossover < 0:  # in the market & cross to the downside
-            self.close()  # close long position
+    def execute(self, start_date=None,end_date=None):
+        for strategy in self.strategies:
+            strategy.pick()
+            strategy.buy()
+            strategy.sell()
+        
+if __name__ == "__main__":
 
-
-cerebro = bt.Cerebro()  # create a "Cerebro" engine instance
-
-# Create a data feed
-# data = bt.feeds.YahooFinanceData(dataname='MSFT',
-#                                  fromdate=datetime(2011, 1, 1),
-#                                  todate=datetime(2012, 12, 31))
-
-
-# 获取框架内置测试数据路径
-modpath = os.path.dirname(bt.__file__)
-data_path = os.path.join(modpath, 'datas/orcl-1995-2014.txt')
-# 加载内置测试数据
-data = bt.feeds.GenericCSVData(
-    dataname=data_path,
-    fromdate=bt.datetime.datetime(2000, 1, 1),
-    todate=bt.datetime.datetime(2001, 1, 1),
-    dtformat=('%Y-%m-%d'),
-    openinterest=-1
-)
-cerebro.adddata(data)  # Add the data feed
-
-cerebro.addstrategy(SmaCross)  # Add the trading strategy
-cerebro.run()  # run it all
-cerebro.plot()  # and plot it with a single command
+    chain = Chain()
+    # chain.add_strategy(Strategy("Strategy A"))
+    chain.execute(start_date="20250101", end_date="20251231")
