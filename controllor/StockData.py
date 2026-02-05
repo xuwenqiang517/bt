@@ -45,17 +45,17 @@ class StockData:
         if today in self.date_df_dict:
             return self.date_df_dict[today]
         else:
-            print(f"没有找到日期 {today} 的股票数据")
+            # print(f"没有找到日期 {today} 的股票数据")
             return pd.DataFrame()
     def get_data_by_date_code(self,today,code)->pd.DataFrame:
         if today in self.data_index:
             if code in self.data_index[today]:
                 return self.data_index[today][code]
             else:
-                print(f"没有找到日期 {today} 股票代码 {code} 的股票数据")
+                # print(f"没有找到日期 {today} 股票代码 {code} 的股票数据")
                 return pd.DataFrame()
         else:
-            print(f"没有找到日期 {today} 的股票数据")
+            # print(f"没有找到日期 {today} 的股票数据")
             return pd.DataFrame()
 
 

@@ -141,9 +141,10 @@ class Strategy:
     
     def calculate_performance(self):
         """计算并返回策略性能指标"""
-        if not self.trades_history:
+        if not self.trades_history and not self.hold:
             return {
                 'total_return': 0,
+                'total_return_pct': 0,
                 'win_rate': 0,
                 'profit_loss_ratio': 0,
                 'trade_count': 0,
@@ -151,8 +152,22 @@ class Strategy:
                 'max_drawdown': 0
             }
         
-        # 计算总收益率
-        total_return = sum(trade['profit'] for trade in self.trades_history)
+        # 计算最终投资组合价值（当前持有股票价值 + 现金）
+        final_holdings_value = 0
+        for hold in self.hold:
+            stock_data = self.data.get_data_by_date_code(self.today, hold.code)
+            # Check if stock_data is empty (DataFrame with no rows) or None
+            if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
+                # 如果今天没有数据，使用买入价格作为估值
+                final_holdings_value += hold.buy_price * hold.buy_count
+            else:
+                final_holdings_value += stock_data.close * hold.buy_count
+        
+        # 最终总价值 = 持仓价值 + 可用现金
+        final_total_value = final_holdings_value + self.free_amount
+        
+        # 总收益 = 最终总价值 - 初始资本
+        total_return = final_total_value - self.init_amount
         total_return_pct = total_return / self.init_amount
         
         # 计算胜率
@@ -176,7 +191,7 @@ class Strategy:
             for i in range(1, len(self.daily_values)):
                 prev_value = self.daily_values[i-1]['value']
                 curr_value = self.daily_values[i]['value']
-                daily_return = (curr_value - prev_value) / prev_value
+                daily_return = (curr_value - prev_value) / prev_value if prev_value != 0 else 0
                 daily_returns.append(daily_return)
             
             if daily_returns:
@@ -205,6 +220,8 @@ class Strategy:
             max_drawdown = 0
         
         return {
+            'init_amount': self.init_amount,
+            'final_amount': self.free_amount,
             'total_return': total_return,
             'total_return_pct': total_return_pct,
             'win_rate': win_rate,
@@ -214,22 +231,6 @@ class Strategy:
             'max_drawdown': max_drawdown
         }
     
-    def print_performance(self):
-        """打印策略性能报告"""
-        perf = self.calculate_performance()
-        if not self.print_log:
-            return
-        print("=" * 50)
-        print("策略绩效报告")
-        print("=" * 50)
-        print(f"初始资金: {self.init_amount:.2f}")
-        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
-        print(f"胜率: {perf['win_rate']:.2%}")
-        print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
-        print(f"交易次数: {perf['trade_count']}")
-        print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
-        print(f"最大回撤: {perf['max_drawdown']:.2%}")
-        print("=" * 50)
 
 class UpStrategy(Strategy):
     def doPick(self,today_stock_df:pd.DataFrame)->pd.DataFrame:
@@ -289,6 +290,7 @@ class Chain:
         #回测框架参数
         self.strategies = []
         self.date_arr = []
+        self.print_report = param.get("print_report", False) if param else False
 
         if param and "strategy" in param:
             self.strategies = param["strategy"]
@@ -318,14 +320,33 @@ class Chain:
             strategy.print()
         
         # 在策略执行结束后打印性能报告
-        strategy.print_performance()
+        perf = strategy.calculate_performance()
+        # 打印策略报告
+        if not self.print_report:
+            return
+        print("=" * 50)
+        print("策略绩效报告")
+        print("=" * 50)
+        print(f"时间周期: {start_date} 至 {end_date}")
+        print(f"期初资金: {perf['init_amount']:.2f}")
+        print(f"期末资金: {perf['final_amount']:.2f}")
+        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
+        print(f"胜率: {perf['win_rate']:.2%}")
+        print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
+        print(f"交易次数: {perf['trade_count']}")
+        print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
+        print(f"最大回撤: {perf['max_drawdown']:.2%}")
+        print("=" * 50)
+
+
         
 if __name__ == "__main__":
 
     param={
-        "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5,"stop_loss_rate":-0.03,"print_log":True})]
+        "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5,"stop_loss_rate":-0.03,"print_log":False})]
         ,"date_arr":[["20250101","20250630"],["20250701","20251231"]]
         # ,"date_arr":[["20250101","20250111"]]
+        ,"print_report":True
     }
     chain = Chain(param=param)
     chain.execute()

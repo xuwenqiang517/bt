@@ -21,8 +21,8 @@ class StockCalendar:
             self.df=pd.DataFrame(df["trade_date"].dt.strftime("%Y%m%d").tolist(),columns=["trade_date"])
             cache.set(cache_file_name, self.df)
             print(self.df)
-        else:
-            print("load from cache")
+        # else:
+            # print("load from cache")
     
     def show(self):
         print(self.df)
