@@ -5,7 +5,7 @@ import msgpack
 
 class LocalCache:
     def __init__(self):
-        self.cache_url=Path(__file__).resolve().parent.parent / "./cache"
+        self.cache_url=Path(__file__).resolve().parent.parent / "./data"
         os.makedirs(self.cache_url, exist_ok=True)
 
         
