@@ -13,6 +13,8 @@ from typing import NamedTuple
 StockDataTuple = NamedTuple("StockDataTuple", [
     ("code", str),
     ("open", float),
+    ("high", float),
+    ("low", float),
     ("close", float),
     ("change_pct", float)
 ])
@@ -76,6 +78,8 @@ class StockData:
                 row.code: StockDataTuple(
                     code=row.code,
                     open=row.open,
+                    high=row.high,
+                    low=row.low,
                     close=row.close,
                     change_pct=row.change_pct
                 )
@@ -146,7 +150,7 @@ class StockData:
                         stock_data = pd.concat([stock_data, df], ignore_index=True)
                 except Exception as e:
                     print(f"Error fetching data for {code}: {e}")
-            # cache.set(all_cache_file_name,stock_data)
+            cache.set(all_cache_file_name,stock_data)
             # cache.clean(prefix="stock_data_")
         return stock_data
 
