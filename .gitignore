@@ -207,6 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 ./cache
-./data
+/data/
 .DS_Store
 *.pyc
