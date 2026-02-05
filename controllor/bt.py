@@ -1,4 +1,3 @@
-from calendar import c
 import sys
 from StockCalendar import StockCalendar as sc
 from StockData import StockData as sd
@@ -16,21 +15,14 @@ HoldStock=NamedTuple("HoldStock", [
     ("sell_price", float),
     ("sell_day", str)
 ])
-    # def __init__(self, code, name, buy_price, buy_count, buy_day, sell_price=None, sell_day=None):
-    #     self.code = code
-    #     self.name = name
-    #     self.buy_price = buy_price
-    #     self.buy_count = buy_count
-    #     self.buy_day = buy_day
-    #     self.sell_price = sell_price
-    #     self.sell_day = sell_day
-
 class Strategy:
     def __init__(self, param):
         self.param = param
         self.init_amount = param.get("init_amount")
         # 最大持仓数
         self.max_hold_count = param.get("max_hold_count")
+        self.print_log= param.get("print_log")
+
         # 可用资金
         self.free_amount = self.init_amount
         # 持仓列表
@@ -41,6 +33,10 @@ class Strategy:
         self.today=None
         # 挑出来的待买的票
         self.picked_data=None
+        
+        # 性能统计相关
+        self.trades_history = []  # 存储所有交易历史
+        self.daily_values = []    # 存储每日总资产
 
         #未配置项做检查
         if self.max_hold_count is None:
@@ -58,7 +54,7 @@ class Strategy:
     def buy(self):
         # 没选出来票,不买
         if self.picked_data is None or self.picked_data.empty:
-            print(f"日期 {self.today} 没有选出股票,跳过买入")
+            # print(f"日期 {self.today} 没有选出股票,跳过买入")
             return
         # 达到最大持仓了,不买
         if len(self.hold) >= self.max_hold_count:
@@ -74,14 +70,14 @@ class Strategy:
             #只能买100的整数
             buy_count= int(buy_amount_per_stock / next_open) // 100 * 100
             if buy_count <=0:
-                print(f"日期 {self.today} 股票 {row['code']} 开盘价 {next_open} 太高,买入数量为0,跳过买入")
                 continue
-            else:
-                hold_stock = HoldStock(row["code"], next_open, buy_count, self.today, None, None)
-                self.hold.append(hold_stock)
-                cost = buy_count * next_open
-                self.free_amount -= cost
-                print(f"日期 {self.today} 买入股票 {row['code']} , 买入价格 {next_open},买入数量 {buy_count},花费金额 {cost},剩余资金 {self.free_amount}")
+            
+            hold_stock = HoldStock(row["code"], next_open, buy_count, self.today, None, None)
+            self.hold.append(hold_stock)
+            cost = round(buy_count * next_open, 2)
+            self.free_amount = round(self.free_amount - cost, 2)
+            if self.print_log:
+                print(f"日期 {self.today} 买入 {row['code']} , {next_open} * {buy_count} = {cost} ,剩余资金 {self.free_amount}")
 
     def sell(self):
         if not self.hold:
@@ -97,15 +93,143 @@ class Strategy:
                     hold_to_remove = hold
                     break
             if hold_to_remove:
-                profit = (sell_price - hold_to_remove.buy_price) * hold_to_remove.buy_count
-                self.free_amount += sell_price * hold_to_remove.buy_count
-                profit_rate = profit / (hold_to_remove.buy_price * hold_to_remove.buy_count) if hold_to_remove.buy_price * hold_to_remove.buy_count > 0 else 0
-                print(f"日期 {self.today} 卖出股票 {code} {hold_to_remove.buy_day}->{self.today} 买入价 {hold_to_remove.buy_price}  卖出价格 {sell_price}  卖出原因 {sell_reason}  利润 {profit} 盈亏比例{profit_rate:.2%}, 剩余资金 {self.free_amount}")
+                profit = round((sell_price - hold_to_remove.buy_price) * hold_to_remove.buy_count, 2)
                 self.hold.remove(hold_to_remove)
+                self.free_amount = round(self.free_amount + sell_price * hold_to_remove.buy_count, 2)
+                profit_rate = profit / (hold_to_remove.buy_price * hold_to_remove.buy_count) if hold_to_remove.buy_price * hold_to_remove.buy_count > 0 else 0
+                
+                # 记录交易历史
+                self.trades_history.append({
+                    'date': self.today,
+                    'code': code,
+                    'buy_date': hold_to_remove.buy_day,
+                    'buy_price': hold_to_remove.buy_price,
+                    'sell_price': sell_price,
+                    'quantity': hold_to_remove.buy_count,
+                    'profit': profit,
+                    'profit_rate': profit_rate,
+                    'reason': sell_reason
+                })
+                
+                if self.print_log:
+                    print(f"日期 {self.today} 卖出 {code} {hold_to_remove.buy_day}->{self.today} {hold_to_remove.buy_price} -> {sell_price} 原因 {sell_reason} 涨跌额 {profit} 涨跌幅 {profit_rate:.2%}, 剩余资金 {self.free_amount}")
+                
     def doSell(self):pass
+
+    def print(self): 
+        if self.print_log:
+            hold_amount=0
+            for hold in self.hold:
+                stock_data=self.data.get_data_by_date_code(self.today, hold.code)
+                # Check if stock_data is empty (DataFrame with no rows) or None
+                if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
+                    print(f"日期 {self.today} 持有 {hold.code} 日期:{self.today} 无数据")
+                else:
+                    print(f"日期 {self.today} 持有 {hold.code} 日期:{hold.buy_day}->{self.today} 价格{hold.buy_price}->{stock_data.close} 累计涨跌幅: {(stock_data.close - hold.buy_price)/hold.buy_price:.2%} ")
+                    hold_amount += stock_data.close * hold.buy_count
+            
+            total_value = hold_amount + self.free_amount
+            print(f"日期 {self.today} 持有股票总市值 {hold_amount}, 可用资金 {self.free_amount}, 总资产 {total_value}")
+            
+            # 记录每日总资产
+            self.daily_values.append({'date': self.today, 'value': total_value})
+            
+            print("\n")
     
     def update_today(self, today): self.today = today
     def bind_data(self, data): self.data=data
+    
+    def calculate_performance(self):
+        """计算并返回策略性能指标"""
+        if not self.trades_history:
+            return {
+                'total_return': 0,
+                'win_rate': 0,
+                'profit_loss_ratio': 0,
+                'trade_count': 0,
+                'sharpe_ratio': 0,
+                'max_drawdown': 0
+            }
+        
+        # 计算总收益率
+        total_return = sum(trade['profit'] for trade in self.trades_history)
+        total_return_pct = total_return / self.init_amount
+        
+        # 计算胜率
+        winning_trades = [trade for trade in self.trades_history if trade['profit'] > 0]
+        win_rate = len(winning_trades) / len(self.trades_history) if self.trades_history else 0
+        
+        # 计算盈亏比
+        winning_profits = [trade['profit'] for trade in winning_trades]
+        losing_losses = [abs(trade['profit']) for trade in self.trades_history if trade['profit'] < 0]
+        
+        avg_win = sum(winning_profits) / len(winning_profits) if winning_profits else 0
+        avg_loss = sum(losing_losses) / len(losing_losses) if losing_losses else 1  # Avoid division by zero
+        profit_loss_ratio = avg_win / avg_loss if avg_loss != 0 else 0
+        
+        # 交易次数
+        trade_count = len(self.trades_history)
+        
+        # 计算夏普比率
+        if len(self.daily_values) > 1:
+            daily_returns = []
+            for i in range(1, len(self.daily_values)):
+                prev_value = self.daily_values[i-1]['value']
+                curr_value = self.daily_values[i]['value']
+                daily_return = (curr_value - prev_value) / prev_value
+                daily_returns.append(daily_return)
+            
+            if daily_returns:
+                daily_std = np.std(daily_returns)
+                avg_daily_return = np.mean(daily_returns)
+                # 年化夏普比率 = (日均收益率 / 日收益率标准差) * sqrt(252)
+                sharpe_ratio = (avg_daily_return / daily_std * np.sqrt(252)) if daily_std != 0 else 0
+            else:
+                sharpe_ratio = 0
+        else:
+            sharpe_ratio = 0
+        
+        # 计算最大回撤
+        if self.daily_values:
+            values = [dv['value'] for dv in self.daily_values]
+            peak = values[0]
+            max_dd = 0
+            for value in values:
+                if value > peak:
+                    peak = value
+                dd = (peak - value) / peak if peak != 0 else 0
+                if dd > max_dd:
+                    max_dd = dd
+            max_drawdown = max_dd
+        else:
+            max_drawdown = 0
+        
+        return {
+            'total_return': total_return,
+            'total_return_pct': total_return_pct,
+            'win_rate': win_rate,
+            'profit_loss_ratio': profit_loss_ratio,
+            'trade_count': trade_count,
+            'sharpe_ratio': sharpe_ratio,
+            'max_drawdown': max_drawdown
+        }
+    
+    def print_performance(self):
+        """打印策略性能报告"""
+        perf = self.calculate_performance()
+        if not self.print_log:
+            return
+        print("=" * 50)
+        print("策略绩效报告")
+        print("=" * 50)
+        print(f"初始资金: {self.init_amount:.2f}")
+        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
+        print(f"胜率: {perf['win_rate']:.2%}")
+        print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
+        print(f"交易次数: {perf['trade_count']}")
+        print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
+        print(f"最大回撤: {perf['max_drawdown']:.2%}")
+        print("=" * 50)
 
 class UpStrategy(Strategy):
     def doPick(self,today_stock_df:pd.DataFrame)->pd.DataFrame:
@@ -134,20 +258,24 @@ class UpStrategy(Strategy):
             if hold.buy_day==today:
                 continue
             stock_data=self.data.get_data_by_date_code(today,code)
-            if stock_data is None:
-                print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
+            # Check if stock_data is empty (DataFrame with no rows) or None
+            if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
+                if self.print_log:
+                    print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
                 continue
             #计算止损价
-            stop_loss_price=buy_price * (1 + stop_loss_rate)
+            stop_loss_price=round(buy_price * (1 + stop_loss_rate), 2)
             # 最低价达到止损价,卖出
-            if stock_data.open<= stop_loss_price:
+            if stock_data.open <= stop_loss_price:
                 sells_info.append((code, stock_data.open,f"开盘价{stock_data.open}低于止损价{stop_loss_price}"))
                 continue
             if stock_data.low <= stop_loss_price:
                 sells_info.append((code, stop_loss_price,f"最低价{stock_data.low}低于止损价{stop_loss_price}"))
                 continue
-            if stock_data.open >= buy_price * 1.15:
-                sells_info.append((code, stock_data.open,f"{today}开盘价{stock_data.open}值盈利15%卖出"))
+            # 15%止盈
+            take_profit_price = round(buy_price * 1.15, 2)
+            if stock_data.open >= take_profit_price:
+                sells_info.append((code, stock_data.open,f"{today}开盘价{stock_data.open}达盈利15%卖出"))
                 continue
         return sells_info
 
@@ -187,13 +315,17 @@ class Chain:
             strategy.buy()
             strategy.sell()
             strategy.pick()
+            strategy.print()
+        
+        # 在策略执行结束后打印性能报告
+        strategy.print_performance()
         
 if __name__ == "__main__":
 
     param={
-        "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5,"stop_loss_rate":-0.03})]
-        ,"1date_arr":[["20250101","20250630"],["20250701","20251231"]]
-        ,"date_arr":[["20250101","20250111"]]
+        "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5,"stop_loss_rate":-0.03,"print_log":True})]
+        ,"date_arr":[["20250101","20250630"],["20250701","20251231"]]
+        # ,"date_arr":[["20250101","20250111"]]
     }
     chain = Chain(param=param)
     chain.execute()

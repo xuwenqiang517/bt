@@ -134,17 +134,17 @@ class StockData:
                     if df is not None and not df.empty:
                         df["code"] = code
                         df["date"] = df["date"].str.replace("-", "")
-                        df["open"] = df["open"].astype(float)
-                        df["close"] = df["close"].astype(float)
-                        df["high"] = df["high"].astype(float)
-                        df["low"] = df["low"].astype(float)
+                        df["open"] = df["open"].astype(float).round(2)
+                        df["close"] = df["close"].astype(float).round(2)
+                        df["high"] = df["high"].astype(float).round(2)
+                        df["low"] = df["low"].astype(float).round(2)
                         df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype(int)
                         df["change_pct"] = (df["close"] - df["close"].shift(1)) / df["close"].shift(1) * 100
                         df["change_pct"] = df["change_pct"].round(2).fillna(0)
-                        df["next_open"] = df["open"].shift(-1)
-                        df["next_close"] = df["close"].shift(-1)
-                        df["next_high"] = df["high"].shift(-1)
-                        df["next_low"] = df["low"].shift(-1)
+                        df["next_open"] = df["open"].shift(-1).round(2)
+                        df["next_close"] = df["close"].shift(-1).round(2)
+                        df["next_high"] = df["high"].shift(-1).round(2)
+                        df["next_low"] = df["low"].shift(-1).round(2)
                         df = df[["code", "date", "open", "close", "high", "low", "volume", "change_pct", "next_open", "next_close"]]
                         df = self.calc_tech(df)
                         stock_data = pd.concat([stock_data, df], ignore_index=True)
