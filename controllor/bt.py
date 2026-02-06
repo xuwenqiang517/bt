@@ -1,3 +1,5 @@
+import random
+
 import sys
 from StockCalendar import StockCalendar as sc
 from StockData import StockData as sd
@@ -62,61 +64,101 @@ StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [
 ])
 class Strategy:
     def __init__(self, base_param_arr, sell_param_arr, buy_param_arr, debug):
-        # 基础参数：[初始资金, 最大持仓数]
-        self.base_param_arr = base_param_arr  # 保存原始参数数组
+        self.base_param_arr = base_param_arr
         self.sell_param_arr = sell_param_arr
         self.buy_param_arr = buy_param_arr
         self.init_amount, self.max_hold_count = base_param_arr[0], base_param_arr[1]
-        self.free_amount = self.init_amount  # 可用资金
-        self.hold = []  # 持仓列表
-        self.data = None  # 数据源
-        self.calendar = None  # 交易日历实例，由外部传入
-        self.today = None  # 当前日期
-        self.picked_data = None  # 挑出来的待买的票
-        self.pick_condition = None  # 选股条件函数
-        self.pick_sort_function = None  # 选股排序函数
-        self.trades_history = []  # 存储所有交易历史
-        self.daily_values = []  # 存储每日总资产
-        self.debug = debug  # 调试模式开关
+        self.free_amount = self.init_amount
+        self.hold = []
+        self.hold_codes = set()
+        self.data = None
+        self.calendar = None
+        self.today = None
+        self.picked_data = None
+        self.trades_history = []
+        self.daily_values = []
+        self.debug = debug
+        self._today_data_cache = {}
+        self._init_pick_filter()
+        self._init_pick_sorter()
         
-
         if self.max_hold_count is None or self.init_amount is None:
             print(f"策略未配置最大持仓数max_hold_count或初始资金init_amount,结束任务")
             sys.exit(1)
+    
+    def _init_pick_filter(self):
+        """初始化筛选函数，子类重写"""
+        self._pick_filter = self._default_pick_filter
+    
+    def _default_pick_filter(self, df: pd.DataFrame) -> np.ndarray:
+        """默认筛选：返回所有股票"""
+        return np.ones(len(df), dtype=bool)
+    
+    def _init_pick_sorter(self):
+        """初始化排序函数，子类重写"""
+        self._pick_sorter = self._default_pick_sorter
+    
+    def _default_pick_sorter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """默认排序：返回原数据"""
+        return df
     
     def bind(self,data:sd,calendar:sc):
         self.data=data
         self.calendar=calendar
 
     def reset(self):
-        """重置策略状态（清空持仓、交易记录、每日资产等）"""
         self.free_amount = self.init_amount
         self.hold = []
+        self.hold_codes = set()
         self.picked_data = None
         self.trades_history = []
         self.daily_values = []
         self.today = None
+        self._today_data_cache = {}
+        self._new_day()
 
-
+    def _new_day(self):
+        self._today_data_cache = {}
+    
+    def _ensure_today_data_loaded(self):
+        if not self.hold:
+            return
+        today = self.today
+        for hold in self.hold:
+            if hold.code not in self._today_data_cache:
+                self._today_data_cache[hold.code] = self.data.get_data_by_date_code(today, hold.code)
+    
+    def _add_hold(self, hold_stock: HoldStock):
+        self.hold.append(hold_stock)
+        self.hold_codes.add(hold_stock.code)
+    
+    def _remove_hold(self, code: str) -> HoldStock:
+        for i, hold in enumerate(self.hold):
+            if hold.code == code:
+                self.hold.pop(i)
+                self.hold_codes.discard(code)
+                return hold
+        return None
+    
     def pick(self)->pd.DataFrame: 
-        # 获取当日股票数据
         today_stock_df = self.data.get_data_by_date(self.today)
-        # 执行筛选
-        filtered_stocks = today_stock_df[self.pick_condition(today_stock_df)]
-        # 处理空结果
+        
+        mask = self._pick_filter(today_stock_df)
+        filtered_stocks = today_stock_df[mask]
+        
         if filtered_stocks is None or filtered_stocks.empty:
             self.picked_data = pd.DataFrame()
             if self.debug:
                 print(f"日期 {self.today} 无符合条件股票")
-        else:
-            self.picked_data = filtered_stocks
-            if self.debug:
-                print(f"日期 {self.today} 选出股票 {len(filtered_stocks)} 只")
-        # 如果筛选结果为空，返回空DataFrame
-        if filtered_stocks.empty:
             return pd.DataFrame()
         
-        return self.pick_sort_function(filtered_stocks)
+        self.picked_data = filtered_stocks
+        result = self._pick_sorter(filtered_stocks)
+        
+        if self.debug:
+            print(f"日期 {self.today} 选出股票 {len(filtered_stocks)} 只")
+        
+        return result
     
 
     def buy(self):
@@ -133,8 +175,8 @@ class Strategy:
             # 持仓数量够了,跳过买入
             if len(self.hold) >= self.max_hold_count:
                 break
-            # 已持有的股票不能重复购买
-            if any(hold.code == row["code"] for hold in self.hold):
+            # 已持有的股票不能重复购买（O(1)查找）
+            if row["code"] in self.hold_codes:
                 continue
             next_open = row["next_open"]
             # 只能买100的整数
@@ -143,7 +185,7 @@ class Strategy:
                 continue
             
             hold_stock = HoldStock(row["code"], next_open, buy_count, self.today, None, None)
-            self.hold.append(hold_stock)
+            self._add_hold(hold_stock)
             cost = round(buy_count * next_open, 2)
             self.free_amount = round(self.free_amount - cost, 2)
             if self.debug:
@@ -152,13 +194,18 @@ class Strategy:
     def sell(self):
         if not self.hold:
             return
+        
         today=self.today
+        
+        # 预加载当日所有持仓股票数据（消除重复调用）
+        self._ensure_today_data_loaded()
+        
         sells_info=[]
         for hold in self.hold:
             code=hold.code
             if hold.buy_day==today:
                 continue
-            stock_data=self.data.get_data_by_date_code(today,code)
+            stock_data = self._today_data_cache.get(code)
             if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
                 if self.debug:
                     print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
@@ -189,38 +236,34 @@ class Strategy:
                     
             if need_sell:
                 sells_info.append((code, sell_price, reason))
-                continue
-
+        
         if len(sells_info) == 0:
             return
         
-        for code, sell_price , sell_reason in sells_info:
-            hold_to_remove = None
-            for hold in self.hold:
-                if hold.code == code:
-                    hold_to_remove = hold
-                    break
-            if hold_to_remove:
-                profit = round((sell_price - hold_to_remove.buy_price) * hold_to_remove.buy_count, 2)
-                self.hold.remove(hold_to_remove)
-                self.free_amount = round(self.free_amount + sell_price * hold_to_remove.buy_count, 2)
-                profit_rate = profit / (hold_to_remove.buy_price * hold_to_remove.buy_count) if hold_to_remove.buy_price * hold_to_remove.buy_count > 0 else 0
+        # 批量处理卖出
+        sell_codes = {s[0] for s in sells_info}
+        for code, sell_price, sell_reason in sells_info:
+            hold = self._remove_hold(code)
+            if hold:
+                profit = round((sell_price - hold.buy_price) * hold.buy_count, 2)
+                self.free_amount = round(self.free_amount + sell_price * hold.buy_count, 2)
+                profit_rate = profit / (hold.buy_price * hold.buy_count) if hold.buy_price * hold.buy_count > 0 else 0
                 
                 # 记录交易历史
                 self.trades_history.append({
                     'date': self.today,
                     'code': code,
-                    'buy_date': hold_to_remove.buy_day,
-                    'buy_price': hold_to_remove.buy_price,
+                    'buy_date': hold.buy_day,
+                    'buy_price': hold.buy_price,
                     'sell_price': sell_price,
-                    'quantity': hold_to_remove.buy_count,
+                    'quantity': hold.buy_count,
                     'profit': profit,
                     'profit_rate': profit_rate,
                     'reason': sell_reason
                 })
                 
                 if self.debug:
-                    print(f"日期 {self.today} 卖出 {code} {hold_to_remove.buy_day}->{self.today} {hold_to_remove.buy_price} -> {sell_price} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {self.free_amount}")
+                    print(f"日期 {self.today} 卖出 {code} {hold.buy_day}->{self.today} {hold.buy_price} -> {sell_price} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {self.free_amount}")
                 
 
     def stop_loss(self, hold:HoldStock, stock_data:pd.DataFrame,params:StopLossParams)->tuple:
@@ -270,11 +313,11 @@ class Strategy:
 
 
     def print_daily(self): 
-        # 计算每日总资产（用于性能计算，无论是否打印日志）
+        # 计算每日总资产（使用缓存，避免重复获取数据）
         hold_amount = 0
+        
         for hold in self.hold:
-            stock_data = self.data.get_data_by_date_code(self.today, hold.code)
-            # Check if stock_data is empty (DataFrame with no rows) or None
+            stock_data = self._today_data_cache.get(hold.code)
             if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
                 if self.debug:
                     print(f"日期 {self.today} 持有 {hold.code} 日期:{self.today} 无数据")
@@ -284,7 +327,6 @@ class Strategy:
                 hold_amount += stock_data.close * hold.buy_count
         
         total_value = hold_amount + self.free_amount
-        # 记录每日总资产和可用资金（始终记录，用于性能计算）
         self.daily_values.append({'date': self.today, 'value': total_value, 'free_amount': self.free_amount})
         
         if self.debug:
@@ -308,10 +350,13 @@ class Strategy:
                 'max_drawdown': 0
             }
         
+        # 预加载当日持仓数据到缓存
+        self._ensure_today_data_loaded()
+        
         # 计算最终投资组合价值（当前持有股票价值 + 现金）
         final_holdings_value = 0
         for hold in self.hold:
-            stock_data = self.data.get_data_by_date_code(self.today, hold.code)
+            stock_data = self._today_data_cache.get(hold.code)
             # Check if stock_data is empty (DataFrame with no rows) or None
             if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
                 # 如果今天没有数据，使用买入价格作为估值
@@ -368,49 +413,48 @@ class Strategy:
 class UpStrategy(Strategy):
     def __init__(self, base_param_arr, sell_param_arr, buy_param_arr, debug):
         super().__init__(base_param_arr, sell_param_arr, buy_param_arr, debug)
-        # 卖出策略链列表
         self.sell_chain_list = self.init_sell_strategy_chain()
-        # 选股条件函数
-        self.pick_condition = self.get_filter_condition
-        # 选股排序函数
-        self.pick_sort_function = self.get_sort_function()
         
-    def get_filter_condition(self, today_stock_df:pd.DataFrame) -> pd.Series:
+    def _init_pick_filter(self):
         buy_up_day_min = self.buy_param_arr[0]
         buy_day3_min = self.buy_param_arr[1]
         buy_day3_max = self.buy_param_arr[2]
         buy_day5_min = self.buy_param_arr[3]
         buy_day5_max = self.buy_param_arr[4]
         
-        if buy_up_day_min is None or buy_day3_min is None or buy_day3_max is None or buy_day5_min is None or buy_day5_max is None:
-            print("买入参数配置不完整")
-            sys.exit(1)
-        # 定义过滤条件
-        return (
-            (today_stock_df["consecutive_up_days"] >= buy_up_day_min)
-            & (today_stock_df["change_3d"] >= buy_day3_min)
-            & (today_stock_df["change_3d"] <= buy_day3_max)
-            & (today_stock_df["change_5d"] >= buy_day5_min)
-            & (today_stock_df["change_5d"] <= buy_day5_max)
-        )
+        def filter_func(df: pd.DataFrame) -> np.ndarray:
+            col_consecutive = df["consecutive_up_days"].values
+            col_change3d = df["change_3d"].values
+            col_change5d = df["change_5d"].values
+            return (
+                (col_consecutive >= buy_up_day_min)
+                & (col_change3d >= buy_day3_min)
+                & (col_change3d <= buy_day3_max)
+                & (col_change5d >= buy_day5_min)
+                & (col_change5d <= buy_day5_max)
+            )
+        self._pick_filter = filter_func
     
-    def get_sort_function(self) -> Callable:
-        """定义排序函数，基类会自动缓存"""
-        def sort_by_vol_rank(df: pd.DataFrame) -> pd.DataFrame:
-            return df.nsmallest(self.max_hold_count, "vol_rank")
-        return sort_by_vol_rank
+    def _init_pick_sorter(self):
+        max_hold = self.max_hold_count
+        
+        def sorter_func(df: pd.DataFrame) -> pd.DataFrame:
+            n = min(max_hold, len(df))
+            if n <= 0:
+                return pd.DataFrame()
+            vol_rank_values = df["vol_rank"].values
+            top_n_indices = np.argpartition(vol_rank_values, n-1)[:n]
+            sorted_indices = top_n_indices[np.argsort(vol_rank_values[top_n_indices])]
+            return df.iloc[sorted_indices].reset_index(drop=True)
+        self._pick_sorter = sorter_func
     
     def init_sell_strategy_chain(self):
-        # 从参数中解包：静态止损率、静态止盈率、累计卖出天数、累计卖出最小收益率
         sl, sp, cd, cr = self.sell_param_arr
         strategies = []
-        # 静态止损策略
         if sl is not None:
             strategies.append(SellStrategy("静态止损", StopLossParams(rate=sl/100.0)))
-        # 静态止盈策略
         if sp is not None:
             strategies.append(SellStrategy("静态止盈", StopProfitParams(rate=sp/100.0)))
-        # 累计涨幅卖出策略
         if cd is not None and cr is not None:
             strategies.append(SellStrategy("累计涨幅卖出", CumulativeSellParams(days=cd, min_return=cr/100.0)))
         return strategies
@@ -495,6 +539,8 @@ class Chain:
         while current_date is not None and current_date <= end_date:
             current_date = scalendar.next()
             strategy.update_today(current_date)
+            # 新一天开始，清空缓存
+            strategy._new_day()
             strategy.buy()
             strategy.sell()
             strategy.pick()
@@ -552,6 +598,10 @@ if __name__ == "__main__":
                                                 "debug": 0
                                             })
     print(f"策略参数数量: {len(strategy_params_list)}")
+    
+    # 随机打散
+    random.shuffle(strategy_params_list)
+
     # 测试 先用1000个策略
     strategy_params_list = strategy_params_list[:1000]
 
