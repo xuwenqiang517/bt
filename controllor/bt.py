@@ -1,10 +1,14 @@
 import sys
+from tracemalloc import start
+
+from regex import P
 from StockCalendar import StockCalendar as sc
 from StockData import StockData as sd
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from typing import NamedTuple
+from datetime import date, datetime
 
 
 HoldStock=NamedTuple("HoldStock", [
@@ -19,25 +23,17 @@ class Strategy:
     def __init__(self, param):
         self.param = param
         self.init_amount = param.get("init_amount")
-        # 最大持仓数
-        self.max_hold_count = param.get("max_hold_count")
+        self.max_hold_count = param.get("max_hold_count") # 最大持仓数
         self.print_log= param.get("print_log")
-
-        # 可用资金
-        self.free_amount = self.init_amount
-        # 持仓列表
-        self.hold=[]
-        # 数据源
-        self.data=None
-        # 当前日期
-        self.today=None
-        # 挑出来的待买的票
-        self.picked_data=None
-        
+        self.free_amount = self.init_amount # 可用资金
+        self.hold=[] # 持仓列表
+        self.data=None # 数据源
+        self.today=None # 当前日期
+        self.picked_data=None # 挑出来的待买的票
         # 性能统计相关
         self.trades_history = []  # 存储所有交易历史
         self.daily_values = []    # 存储每日总资产
-
+        self.sell_chain_list = [] #卖出策略链
         #未配置项做检查
         if self.max_hold_count is None:
             print(f"策略未配置最大持仓数max_hold_count,结束任务")
@@ -45,6 +41,7 @@ class Strategy:
         if self.init_amount is None:
             print(f"策略未配置初始资金init_amount,结束任务")
             sys.exit(1)
+        print("初始化策略 ")
         
 
 
@@ -82,7 +79,33 @@ class Strategy:
     def sell(self):
         if not self.hold:
             return
-        sells_info = self.doSell()
+        today=self.today
+        sells_info=[]
+        for hold in self.hold:
+            code=hold.code
+            if hold.buy_day==today:
+                continue
+            stock_data=self.data.get_data_by_date_code(today,code)
+            if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
+                if self.print_log:
+                    print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
+                continue
+            # 策略决定判断是否要卖掉这个票
+            need_sell, sell_price, reason = False, 0, ""
+            for sell_name, rate in self.sell_chain_list:
+                # print(f"卖出策略 {sell_name} rate={rate} type={type(rate)}")
+                if sell_name=="静态止损":
+                    need_sell, sell_price, reason = self.stop_loss(hold, stock_data, rate)
+                elif sell_name=="静态止盈":
+                    need_sell, sell_price, reason = self.stop_profit(hold, stock_data, rate)
+                else:
+                    if self.print_log:
+                        print(f"日期 {today} 未知的卖出策略 {sell_name},跳过")
+                    continue
+            if need_sell:
+                sells_info.append((code, sell_price, reason))
+                continue
+
         if len(sells_info) == 0:
             return
         
@@ -114,7 +137,38 @@ class Strategy:
                 if self.print_log:
                     print(f"日期 {self.today} 卖出 {code} {hold_to_remove.buy_day}->{self.today} {hold_to_remove.buy_price} -> {sell_price} 原因 {sell_reason} 涨跌额 {profit} 涨跌幅 {profit_rate:.2%}, 剩余资金 {self.free_amount}")
                 
-    def doSell(self):pass
+
+    def stop_loss(self, hold:HoldStock, stock_data:pd.DataFrame,stop_loss_rate:float)->tuple:
+        """
+        触发固定阈值的止损卖出
+        """
+        if stop_loss_rate is None:
+            print(f"策略未配置止损率stop_loss_rate,结束任务")
+            sys.exit(1)
+        #计算止损价
+        stop_loss_price=round(hold.buy_price * (1 + stop_loss_rate), 2)
+        if stock_data.open <= stop_loss_price:
+            return True, stock_data.open,f"开盘价{stock_data.open}低于止损价{stop_loss_price},以开盘价卖出"
+        elif stock_data.low <= stop_loss_price:
+            return True, stop_loss_price,f"最低价{stock_data.low}低于止损价{stop_loss_price},以止损价卖出"
+        return False, 0, ""
+    
+    def stop_profit(self, hold:HoldStock, stock_data:pd.DataFrame,stop_profit_rate:float)->tuple:
+        """
+        触发固定阈值的止盈卖出
+        """
+        if stop_profit_rate is None:
+            print(f"策略未配置止盈率stop_profit_rate,结束任务")
+            sys.exit(1)
+        #计算止盈价
+        stop_profit_price=round(hold.buy_price * (1 + stop_profit_rate), 2)
+        if stock_data.open >= stop_profit_price:
+            return True, stock_data.open,f"开盘价{stock_data.open}高于止盈价{stop_profit_price},以开盘价卖出"
+        elif stock_data.high >= stop_profit_price:
+            return True, stop_profit_price,f"最高价{stock_data.high}高于止盈价{stop_profit_price},以止盈价卖出"
+        return False, 0, ""
+
+
 
     def print_daily(self): 
         # 计算每日总资产（用于性能计算，无论是否打印日志）
@@ -235,6 +289,14 @@ class Strategy:
     
 
 class UpStrategy(Strategy):
+
+    def __init__(self, param):
+        super().__init__(param)
+        self.stop_loss_rate= param.get("stop_loss_rate")
+        self.stop_profit_rate= param.get("stop_profit_rate")
+        self.sell_chain_list = self.sell_chain()
+        print(f"初始化上涨策略 UpStrategy {self.sell_chain_list}")
+
     def doPick(self,today_stock_df:pd.DataFrame)->pd.DataFrame:
         # 选出涨幅前10的股票
         if today_stock_df.empty:
@@ -245,43 +307,11 @@ class UpStrategy(Strategy):
         # print(top_stocks[['code', 'change_pct']])
         return top_stocks
     
-    def doSell(self):
-        today=self.today
-        # 止损率 从配置param取
-        stop_loss_rate= self.param.get("stop_loss_rate") 
-        # 判断止损率是否配置
-        if stop_loss_rate is None:
-            print(f"策略未配置止损率stop_loss_rate,结束任务")
-            sys.exit(1)
-
-        sells_info=[]
-        for hold in self.hold:
-            code=hold.code
-            buy_price=hold.buy_price
-            if hold.buy_day==today:
-                continue
-            stock_data=self.data.get_data_by_date_code(today,code)
-            # Check if stock_data is empty (DataFrame with no rows) or None
-            if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
-                if self.print_log:
-                    print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
-                continue
-            #计算止损价
-            stop_loss_price=round(buy_price * (1 + stop_loss_rate), 2)
-            # 最低价达到止损价,卖出
-            if stock_data.open <= stop_loss_price:
-                sells_info.append((code, stock_data.open,f"开盘价{stock_data.open}低于止损价{stop_loss_price}"))
-                continue
-            if stock_data.low <= stop_loss_price:
-                sells_info.append((code, stop_loss_price,f"最低价{stock_data.low}低于止损价{stop_loss_price}"))
-                continue
-            # 15%止盈
-            take_profit_price = round(buy_price * 1.15, 2)
-            if stock_data.open >= take_profit_price:
-                sells_info.append((code, stock_data.open,f"{today}开盘价{stock_data.open}达盈利15%卖出"))
-                continue
-        return sells_info
-
+    def sell_chain(self):
+        # return [("静态止损", self.stop_loss_rate),("静态止盈", self.stop_profit_rate)]
+        return [("静态止损", self.stop_loss_rate)]
+    
+        
         
 
 
@@ -299,18 +329,16 @@ class Chain:
         if param and "date_arr" in param:
             self.date_arr = param["date_arr"]
 
-    def execute(self):
-        # 数据
-        stock_data = sd()
+    def execute(self,stock_data,scalendar):
         # 遍历策略
         for strategy in self.strategies:
             strategy.bind_data(stock_data)
             # 遍历日期区间
             for start_date, end_date in self.date_arr:
-                self.execute_one_strategy(strategy, start_date, end_date)
+                self.execute_one_strategy(strategy, start_date, end_date,scalendar)
 
-    def execute_one_strategy(self, strategy, start_date, end_date):
-        scalendar = sc()
+    def execute_one_strategy(self, strategy, start_date, end_date,scalendar):
+        
         current_date = scalendar.start(start_date)
 
         while current_date is not None and current_date <= end_date:
@@ -328,10 +356,13 @@ class Chain:
             return
         print("=" * 50)
         print(f"时间周期: {start_date} 至 {end_date}")
-        print(f"期初资金: {perf['init_amount']:.2f} - > 期末资金: {perf['final_amount']:.2f}")
-        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%}) 胜率: {perf['win_rate']:.2%}")
-        print(f"盈亏比: {perf['profit_loss_ratio']:.2f} 交易次数: {perf['trade_count']}")
-        print(f"夏普比率: {perf['sharpe_ratio']:.2f} 最大回撤: {perf['max_drawdown']:.2%}")
+        print(f"资金: {perf['init_amount']:.2f} - > {perf['final_amount']:.2f}")
+        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
+        print(f"胜率: {perf['win_rate']:.2%}")
+        print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
+        print(f"交易次数: {perf['trade_count']}")
+        print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
+        print(f"最大回撤: {perf['max_drawdown']:.2%})")
 
 
         
@@ -339,9 +370,17 @@ if __name__ == "__main__":
 
     param={
         "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5,"stop_loss_rate":-0.03,"print_log":False})]
-        ,"date_arr":[["20250101","20250630"],["20250701","20251231"]]
-        # ,"date_arr":[["20250101","20250111"]]
-        ,"print_report":True
+        # ,"date_arr":[["20250101","20250630"],["20250701","20251231"]]
+        ,"date_arr":[["20250101","20250111"]]
+        ,"print_report":False
     }
+    
+    start_time=datetime.now().timestamp()*1000
     chain = Chain(param=param)
-    chain.execute()
+    # 数据
+    stock_data = sd()
+    scalendar = sc()
+    for i in tqdm(range(100)):
+        chain.execute(stock_data,scalendar)
+    end_time=datetime.now().timestamp()*1000
+    print(f"回测完成 耗时{(end_time-start_time):.2f}ms")
