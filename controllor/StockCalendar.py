@@ -23,9 +23,11 @@ class StockCalendar:
             print(self.df)
         # else:
             # print("load from cache")
-    
-    def show(self):
-        print(self.df)
+        
+        # 构建日期到索引的映射字典，用于O(1)时间复杂度的gap计算
+        self.date_to_index = {}
+        for idx, row in self.df.iterrows():
+            self.date_to_index[row["trade_date"]] = idx
 
     def start(self,start_date)->str:
         """
@@ -49,12 +51,24 @@ class StockCalendar:
         else:
             return None
 
-
+    def gap(self,start:str,end:str)->int:
+        """
+        计算 start 到 end 之间的交易日数量 用O1的时间复杂度 可以提前在init里面构造最简单高效的数据结构
+        """
+        if start not in self.date_to_index or end not in self.date_to_index:
+            return -1
+        
+        start_index = self.date_to_index[start]
+        end_index = self.date_to_index[end]
+        
+        if start_index > end_index:
+            return -1
+        
+        return end_index - start_index + 1
         
 
 if __name__ == "__main__":
     sc=StockCalendar()
-    # sc.show()
     date=sc.start("20240106")
     print(f"start date: {date}")
 
