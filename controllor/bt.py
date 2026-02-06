@@ -88,6 +88,15 @@ class Strategy:
         self.data=data
         self.calendar=calendar
 
+    def reset(self):
+        """重置策略状态（清空持仓、交易记录、每日资产等）"""
+        self.free_amount = self.init_amount
+        self.hold = []
+        self.picked_data = None
+        self.trades_history = []
+        self.daily_values = []
+        self.today = None
+
 
     def pick(self)->pd.DataFrame: 
         # 获取当日股票数据
@@ -427,9 +436,11 @@ class Chain:
         print("已缓存执行策略数:", len(executed_keys)   )
         # 定义个临时pd.DataFrame，用于存储新的行
         temp_df = pd.DataFrame(columns=RESULT_COLS)
+        # 展示进度条
         for idx, strategy_params in tqdm(enumerate(self.strategies), desc="执行策略"):
-            # 根据参数动态创建策略对象
+            # 根据参数动态创建策略对象（__init__中已初始化干净状态）
             strategy = UpStrategy(**strategy_params)
+
             # 参数用 分隔符 拼在一起作为hash可以唯一标识一个策略，再把3个参数也拼在一起
             param_join_str = "||".join(",".join(map(str, arr)) for arr in [
                 strategy.base_param_arr, strategy.buy_param_arr, strategy.sell_param_arr
@@ -478,6 +489,8 @@ class Chain:
         scalendar=self.calendar
         current_date = scalendar.start(start_date)
         strategy.bind(self.stock_data,self.calendar)
+        # 重置策略状态（每个时间周期独立开始）
+        strategy.reset()
         
         while current_date is not None and current_date <= end_date:
             current_date = scalendar.next()
@@ -522,10 +535,10 @@ if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     # 定义策略参数字典列表（不创建对象，省内存）
     strategy_params_list=[]
-    for a in range(2,6,1): # 持仓数量
-        for buy1 in range(1,4,1): # 连涨天数
-            for buy2 in range(1,5,1): # 3日涨幅最低
-                for buy3 in range(5,15,1): # 3日涨幅最高
+    for a in range(2,4,1): # 持仓数量
+        for buy1 in range(2,4,1): # 连涨天数
+            for buy2 in range(3,5,1): # 3日涨幅最低
+                for buy3 in range(5,15,5): # 3日涨幅最高
                     for buy4 in range(5,15,5): # 5日涨幅最低
                         for buy5 in range(15,45,5): # 5日涨幅最高
                             for sell1 in range(5,20,3): # 止损率
@@ -539,6 +552,9 @@ if __name__ == "__main__":
                                                 "debug": 0
                                             })
     print(f"策略参数数量: {len(strategy_params_list)}")
+    # 测试 先用1000个策略
+    strategy_params_list = strategy_params_list[:1000]
+
     param={
         "strategy":strategy_params_list
         ,"date_arr":[["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"]]
