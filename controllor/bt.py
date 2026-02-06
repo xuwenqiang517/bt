@@ -11,7 +11,8 @@ from datetime import date, datetime
 from LocalCache import LocalCache
 
 # 回测结果CSV列名
-RESULT_COLS = ['周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '平均交易次数', '平均资金使用率', '配置']
+RESULT_COLS_A = ['周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '平均交易次数', '平均资金使用率', '配置']
+RESULT_COLS_B = ['配置']
 
 
 HoldStock=NamedTuple("HoldStock", [
@@ -473,60 +474,84 @@ class Chain:
         self.calendar = sc()  # 交易日历
 
     def execute(self) -> list:
-        cached_df = self.cache.get_csv("a_strategy_results")
-        if cached_df is None:
-            cached_df = pd.DataFrame(columns=RESULT_COLS)
-        executed_keys = set(cached_df['配置'].tolist()) if '配置' in cached_df.columns else set()
-        print("已缓存执行策略数:", len(executed_keys)   )
-        # 定义个临时pd.DataFrame，用于存储新的行
-        temp_df = pd.DataFrame(columns=RESULT_COLS)
-        # 展示进度条
-        for idx, strategy_params in tqdm(enumerate(self.strategies), desc="执行策略"):
-            # 根据参数动态创建策略对象（__init__中已初始化干净状态）
+        cached_a_df = self.cache.get_csv("a_strategy_results")
+        if cached_a_df is None:
+            cached_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+        
+        cached_b_df = self.cache.get_csv("b_strategy_results")
+        if cached_b_df is None:
+            cached_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        
+        executed_keys = set(cached_a_df['配置'].tolist()) if '配置' in cached_a_df.columns else set()
+        b_keys = set(cached_b_df['配置'].tolist()) if '配置' in cached_b_df.columns else set()
+        executed_keys.update(b_keys)
+        
+        print("已缓存执行策略数:", len(executed_keys))
+        
+        temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+        temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        
+        total_strategies = len(self.strategies)
+        print(f"总策略数: {total_strategies}, 已缓存: {len(executed_keys)}")
+        
+        for idx, strategy_params in tqdm(enumerate(self.strategies), desc="执行策略", total=total_strategies):
             strategy = UpStrategy(**strategy_params)
 
-            # 参数用 分隔符 拼在一起作为hash可以唯一标识一个策略，再把3个参数也拼在一起
-            param_join_str = "||".join(",".join(map(str, arr)) for arr in [
-                strategy.base_param_arr, strategy.buy_param_arr, strategy.sell_param_arr
+            param_join_str = "|".join(",".join(map(str, arr)) for arr in [
+                [strategy.base_param_arr[1]], strategy.buy_param_arr, strategy.sell_param_arr
             ])
 
             if param_join_str in executed_keys:
                 continue
 
-            # 执行策略在不同时间周期上的回测
-            strategy_results = [self.execute_one_strategy(strategy, s, e) for s, e in self.date_arr]
-            if not strategy_results:
+            results = []
+            all_win = True
+            for s, e in self.date_arr:
+                result = self.execute_one_strategy(strategy, s, e)
+                if result.总收益率 <= 0:
+                    all_win = False
+                    break
+                results.append(result)
+            
+            if not results:
                 continue
-
-            r = strategy_results
-            win_count = sum(1 for x in r if x.总收益率 > 0)
-            total_count = len(r)
-            win_rate = win_count / total_count
-            # 构建结果行
-            new_row = {
-                "周期胜率": f"{int(win_rate * 100)}%({win_count}/{total_count})",
-                "平均胜率": f"{int(np.mean([x.胜率 for x in r]) * 100)}%",
-                "平均收益率": f"{np.mean([x.总收益率 for x in r]) * 100:.2f}%",
-                "平均最大回撤": f"{np.mean([x.最大回撤 for x in r]) * 100:.2f}%",
-                "平均交易次数": round(np.mean([x.交易次数 for x in r]), 1),
-                "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in r]) * 100:.2f}%",
-                "配置": param_join_str
-            }
-            temp_df.loc[len(temp_df)] = new_row
+            
+            if all_win:
+                win_count = len(results)
+                total_count = len(results)
+                win_rate = win_count / total_count
+                new_row = {
+                    "周期胜率": f"{int(win_rate * 100)}%({win_count}/{total_count})",
+                    "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
+                    "平均收益率": f"{np.mean([x.总收益率 for x in results]) * 100:.2f}%",
+                    "平均最大回撤": f"{np.mean([x.最大回撤 for x in results]) * 100:.2f}%",
+                    "平均交易次数": round(np.mean([x.交易次数 for x in results]), 1),
+                    "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in results]) * 100:.2f}%",
+                    "配置": param_join_str
+                }
+                temp_a_df.loc[len(temp_a_df)] = new_row
+            else:
+                temp_b_df.loc[len(temp_b_df)] = {"配置": param_join_str}
+            
             executed_keys.add(param_join_str)
 
-            if idx % 100 == 0:
-                # 每100个策略，合并一次temp_df到cached_df
-                if cached_df.empty:
-                    cached_df = temp_df.copy()
+            if idx % 10000 == 0:
+                if cached_a_df.empty:
+                    cached_a_df = temp_a_df.copy()
                 else:
-                    # 旧缓存数据可能没有新字段，补充NaN
                     for col in ['平均交易次数', '平均资金使用率']:
-                        if col not in cached_df.columns:
-                            cached_df[col] = np.nan
-                    cached_df = pd.concat([cached_df, temp_df], ignore_index=True)
-                temp_df = pd.DataFrame(columns=RESULT_COLS)
-                self.cache.set_csv("a_strategy_results", cached_df)
+                        if col not in cached_a_df.columns:
+                            cached_a_df[col] = np.nan
+                    cached_a_df = pd.concat([cached_a_df, temp_a_df], ignore_index=True)
+                temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+                self.cache.set_csv("a_strategy_results", cached_a_df)
+                
+                if cached_b_df.empty:
+                    cached_b_df = temp_b_df.copy()
+                else:
+                    cached_b_df = pd.concat([cached_b_df, temp_b_df], ignore_index=True)
+                temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+                self.cache.set_csv("b_strategy_results", cached_b_df)
 
 
     def execute_one_strategy(self, strategy, start_date, end_date) -> BacktestResult:
@@ -581,13 +606,13 @@ if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     # 定义策略参数字典列表（不创建对象，省内存）
     strategy_params_list=[]
-    for a in range(2,4,1): # 持仓数量
+    for a in range(2,6,1): # 持仓数量
         for buy1 in range(2,4,1): # 连涨天数
-            for buy2 in range(3,5,1): # 3日涨幅最低
+            for buy2 in range(3,10,1): # 3日涨幅最低
                 for buy3 in range(5,15,5): # 3日涨幅最高
-                    for buy4 in range(5,15,5): # 5日涨幅最低
+                    for buy4 in range(5,15,1): # 5日涨幅最低
                         for buy5 in range(15,45,5): # 5日涨幅最高
-                            for sell1 in range(5,20,3): # 止损率
+                            for sell1 in range(5,15,1): # 止损率
                                 for sell2 in range(15,100,5): # 止盈率
                                     for sell3 in range(3,6,1): # 止盈持有时间
                                         for sell4 in range(10,40,5): # 止盈持有收益率
@@ -603,7 +628,7 @@ if __name__ == "__main__":
     random.shuffle(strategy_params_list)
 
     # 测试 先用1000个策略
-    strategy_params_list = strategy_params_list[:1000]
+    # strategy_params_list = strategy_params_list[:1000]
 
     param={
         "strategy":strategy_params_list
