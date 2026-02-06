@@ -427,7 +427,9 @@ class Chain:
         print("已缓存执行策略数:", len(executed_keys)   )
         # 定义个临时pd.DataFrame，用于存储新的行
         temp_df = pd.DataFrame(columns=RESULT_COLS)
-        for idx, strategy in tqdm(enumerate(self.strategies), desc="执行策略"):
+        for idx, strategy_params in tqdm(enumerate(self.strategies), desc="执行策略"):
+            # 根据参数动态创建策略对象
+            strategy = UpStrategy(**strategy_params)
             # 参数用 分隔符 拼在一起作为hash可以唯一标识一个策略，再把3个参数也拼在一起
             param_join_str = "||".join(",".join(map(str, arr)) for arr in [
                 strategy.base_param_arr, strategy.buy_param_arr, strategy.sell_param_arr
@@ -518,12 +520,27 @@ class Chain:
         
 if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
-    # 数据
-    base_param_arr=[100000,5]
-    sell_param_arr=[-8,15,3,5]
-    buy_param_arr=[2,5,10,5,10]
+    # 定义策略参数字典列表（不创建对象，省内存）
+    strategy_params_list=[]
+    for a in range(2,6,1): # 持仓数量
+        for buy1 in range(1,4,1): # 连涨天数
+            for buy2 in range(1,5,1): # 3日涨幅最低
+                for buy3 in range(5,15,1): # 3日涨幅最高
+                    for buy4 in range(5,15,5): # 5日涨幅最低
+                        for buy5 in range(15,45,5): # 5日涨幅最高
+                            for sell1 in range(5,20,3): # 止损率
+                                for sell2 in range(15,100,5): # 止盈率
+                                    for sell3 in range(3,6,1): # 止盈持有时间
+                                        for sell4 in range(10,40,5): # 止盈持有收益率
+                                            strategy_params_list.append({
+                                                "base_param_arr": [100000, a],
+                                                "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
+                                                "sell_param_arr": [sell1, sell2, sell3, sell4],
+                                                "debug": 0
+                                            })
+    print(f"策略参数数量: {len(strategy_params_list)}")
     param={
-        "strategy":[UpStrategy(base_param_arr=base_param_arr,buy_param_arr=buy_param_arr,sell_param_arr=sell_param_arr,debug=0)]
+        "strategy":strategy_params_list
         ,"date_arr":[["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"]]
         # ,"date_arr":[["20250101","20260101"]]
         ,"print_report":0
