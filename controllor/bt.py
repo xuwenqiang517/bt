@@ -69,7 +69,10 @@ class Strategy:
         self.print_log= param.get("print_log")
         self.free_amount = self.init_amount # 可用资金
         self.hold=[] # 持仓列表
+
         self.data=None # 数据源
+        self.calendar = None  # 交易日历实例，由外部传入
+
         self.today=None # 当前日期
         self.picked_data=None # 挑出来的待买的票
         self.sell_chain_list = [] #卖出策略链
@@ -78,30 +81,9 @@ class Strategy:
         
         self.trades_history = []  # 存储所有交易历史
         self.daily_values = []    # 存储每日总资产
-        self.calendar = None  # 交易日历实例，由外部传入
-        
-    def reset(self):
-        """重置策略状态，用于多次回测"""
-        self.free_amount = self.init_amount
-        self.hold = []
-        self.trades_history = []
-        self.daily_values = []
-        self.today = None
-        self.picked_data = None
-        
-        # 在初始化时一次性创建好排序函数，避免重复创建
-        # 如果子类实现了get_sort_function则调用，否则设为None
-        self._sort_function = self.get_sort_function() if hasattr(self, 'get_sort_function') else None
-        
-        # 在初始化时预创建过滤参数（如果子类需要）
-        self._filter_params = self._get_filter_params() if hasattr(self, '_get_filter_params') else None
-        
-        #未配置项做检查
-        if self.max_hold_count is None:
-            print(f"策略未配置最大持仓数max_hold_count,结束任务")
-            sys.exit(1)
-        if self.init_amount is None:
-            print(f"策略未配置初始资金init_amount,结束任务")
+
+        if self.max_hold_count is None or self.init_amount is None:
+            print(f"策略未配置最大持仓数max_hold_count或初始资金init_amount,结束任务")
             sys.exit(1)
         
 
@@ -300,9 +282,9 @@ class Strategy:
             print("\n")
     
     def update_today(self, today): self.today = today
-    def bind_data(self, data, calendar=None): 
-        self.data = data
-        self.calendar = calendar
+    # def bind_data(self, data, calendar=None): 
+    #     self.data = data
+    #     self.calendar = calendar
     
     def calculate_performance(self):
         """计算并返回策略性能指标"""
@@ -484,80 +466,55 @@ class UpStrategy(Strategy):
         
         
 
-
-
-
 class Chain:
     def __init__(self, param=None):
-        self.strategies = []
-        self.date_arr = []
-        self.print_report = param.get("print_report", False) if param else False
+        self.strategies = param["strategy"]
+        self.date_arr = param["date_arr"]
+        self.print_report = param.get("print_report", False)
         self.cache = LocalCache()
         self.param = param
+        self.stock_data = sd()
+        self.calendar = sc()
 
-        if param and "strategy" in param:
-            self.strategies = param["strategy"]
-        if param and "date_arr" in param:
-            self.date_arr = param["date_arr"]
-
-    
-
-    def execute(self, stock_data, scalendar) -> list:
+    def execute(self) -> list:
         cached_df = self.cache.get_csv("a_strategy_results")
         if cached_df is None:
             cached_df = pd.DataFrame(columns=['hash', '周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '策略配置'])
-
         executed_keys = set(cached_df['hash'].tolist()) if 'hash' in cached_df.columns else set()
 
-        new_rows = []
-        for strategy in self.strategies:
-            strategy_config = strategy.param
-            cache_key = hashlib.md5(json.dumps(strategy_config, sort_keys=True).encode('utf-8')).hexdigest()
-
+        # 定义个临时pd.DataFrame，用于存储新的行
+        temp_df = pd.DataFrame(columns=['hash', '周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '策略配置'])
+        for idx, strategy in tqdm(enumerate(self.strategies), desc="执行策略"):
+            strategy_config_json = json.dumps(strategy.param, sort_keys=True).encode('utf-8')
+            cache_key = hashlib.md5(strategy_config_json).hexdigest()
             if cache_key in executed_keys:
-                print(f"策略配置已执行，跳过：{strategy_config}")
                 continue
-
             strategy_results = []
-            strategy.reset()
-            strategy.bind_data(stock_data, scalendar)
-
             for start_date, end_date in self.date_arr:
-                result = self.execute_one_strategy(strategy, start_date, end_date, scalendar)
-                strategy_results.append(result)
+                strategy_results.append(self.execute_one_strategy(strategy, start_date, end_date))
 
             if not strategy_results:
                 continue
-
-            avg_return = round(np.mean([r.总收益率 for r in strategy_results]), 4)
-            avg_win_rate = round(np.mean([r.胜率 for r in strategy_results]), 4)
-            period_win_rate = round(sum(1 for r in strategy_results if r.总收益率 > 0) / len(strategy_results), 4)
-            avg_max_drawdown = round(np.mean([r.最大回撤 for r in strategy_results]), 4)
-
-            new_rows.append({
+            # 新行
+            new_row = {
                 "hash": cache_key,
-                "周期胜率": period_win_rate,
-                "平均胜率": avg_win_rate,
-                "平均收益率": avg_return,
-                "平均最大回撤": avg_max_drawdown,
-                "策略配置": strategy_config
-            })
+                "周期胜率": round(sum(1 for r in strategy_results if r.总收益率 > 0) / len(strategy_results), 4),
+                "平均胜率": round(np.mean([r.胜率 for r in strategy_results]), 4),
+                "平均收益率": round(np.mean([r.总收益率 for r in strategy_results]), 4),
+                "平均最大回撤": round(np.mean([r.最大回撤 for r in strategy_results]), 4),
+                "策略配置": strategy_config_json
+            }
+            temp_df = pd.concat([temp_df, pd.DataFrame([new_row])], ignore_index=True)
+            executed_keys.add(cache_key)
+            if idx %100 == 0:
+                # 每100个策略，合并一次temp_df
+                cached_df = pd.concat([cached_df, temp_df], ignore_index=True)
+                temp_df = pd.DataFrame(columns=['hash', '周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '策略配置'])
+                self.cache.set_csv("a_strategy_results", cached_df)
 
-        if new_rows:
-            new_df = pd.DataFrame(new_rows)
-            new_df = new_df.dropna(how='all')
-            cached_df = pd.concat([cached_df, new_df], ignore_index=True)
 
-        cached_df.sort_values(
-            by=['周期胜率', '平均胜率', '平均最大回撤', '平均收益率'],
-            ascending=[False, False, True, False],
-            inplace=True
-        )
-        self.cache.set_csv("a_strategy_results", cached_df)
-
-        return cached_df.to_dict('records')
-
-    def execute_one_strategy(self, strategy, start_date, end_date,scalendar) -> BacktestResult:
+    def execute_one_strategy(self, strategy, start_date, end_date) -> BacktestResult:
+        scalendar=self.calendar
         current_date = scalendar.start(start_date)
         while current_date is not None and current_date <= end_date:
             current_date = scalendar.next()
@@ -601,8 +558,10 @@ class Chain:
 
         
 if __name__ == "__main__":
+    start_time=datetime.now().timestamp()*1000
+    # 数据
     param={
-        "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5
+        "strategy":[UpStrategy(param={"init_amount":100000,"max_hold_count":5
                                 # 卖出参数：统一使用sell_前缀
                                 ,"sell_stop_loss_rate":-8  # 统一使用整数百分比：-8表示-8%
                                 ,"sell_stop_profit_rate":15  # 统一使用整数百分比：15表示15%
@@ -621,13 +580,11 @@ if __name__ == "__main__":
         ,"print_report":1
     }
     
-    start_time=datetime.now().timestamp()*1000
     chain = Chain(param=param)
-    # 数据
-    stock_data = sd()
-    scalendar = sc()
     for i in tqdm(range(1)):
         # 执行回测
-        chain.execute(stock_data,scalendar)
+        chain.execute()
+
+
     end_time=datetime.now().timestamp()*1000
     print(f"回测完成 耗时{(end_time-start_time):.2f}ms")
