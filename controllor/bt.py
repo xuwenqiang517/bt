@@ -54,7 +54,8 @@ class Strategy:
         self.calendar = None  # 交易日历实例，由外部传入
         
         # 在初始化时一次性创建好排序函数，避免重复创建
-        self._sort_function = self.get_sort_function()
+        # 如果子类实现了get_sort_function则调用，否则设为None
+        self._sort_function = self.get_sort_function() if hasattr(self, 'get_sort_function') else None
         
         # 在初始化时预创建过滤参数（如果子类需要）
         self._filter_params = self._get_filter_params() if hasattr(self, '_get_filter_params') else None
@@ -104,6 +105,9 @@ class Strategy:
             #持仓数量够了,跳过买入
             if len(self.hold) >= self.max_hold_count:
                 break
+            # 已持有的股票不能重复购买
+            if any(hold.code == row["code"] for hold in self.hold):
+                continue
             next_open=row["next_open"]
             #只能买100的整数
             buy_count= int(buy_amount_per_stock / next_open) // 100 * 100
