@@ -65,7 +65,31 @@ class StockCalendar:
             return -1
         
         return end_index - start_index + 1
+
+    def build_day_array(self,start:str,duration:int)->list:
+        """
+        从 start 后面所有可用的交易日，按 duration 天拆分成多个区间
+        返回格式: [[start后第1个交易日, start后第duration个交易日], [start后第duration+1个交易日, ...], ...]
+        """
+        # 找到 start 后面第一个交易日
+        actual_start_idx = None
+        for idx, row in self.df.iterrows():
+            if row["trade_date"] >= start:
+                actual_start_idx = idx
+                break
         
+        if actual_start_idx is None:
+            return []
+        
+        all_dates = self.df.iloc[actual_start_idx + 1:]["trade_date"].tolist()
+        
+        result = []
+        for i in range(0, len(all_dates), duration):
+            chunk = all_dates[i:i + duration]
+            if chunk:
+                result.append([chunk[0], chunk[-1]])
+        
+        return result
 
 if __name__ == "__main__":
     sc=StockCalendar()

@@ -8,6 +8,28 @@ class LocalCache:
         self.cache_url=Path(__file__).resolve().parent.parent / "./data"
         os.makedirs(self.cache_url, exist_ok=True)
 
+    def get_csv(self, file_path):
+        """
+        从本地缓存中读取CSV文件
+        :param file_path: 缓存文件基础路径（无后缀）
+        :return: 读取的DataFrame或None（如果文件不存在）
+        """
+        try:
+            return pd.read_csv(self.cache_url / f"{file_path}.csv")
+        except FileNotFoundError:
+            return None
+
+    def set_csv(self, file_path, data):
+        """
+        缓存DataFrame到本地CSV文件
+        :param file_path: 缓存文件基础路径（无后缀）
+        :param data: 待存储DataFrame
+        """
+        if isinstance(data, pd.DataFrame):
+            data.to_csv(self.cache_url / f"{file_path}.csv", index=False)
+        else:
+            raise ValueError("数据类型必须为pd.DataFrame")
+
         
     def set(self, file_path, data):
         """

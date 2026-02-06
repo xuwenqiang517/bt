@@ -6,6 +6,10 @@ import numpy as np
 from tqdm import tqdm
 from typing import NamedTuple, Callable
 from datetime import date, datetime
+import hashlib
+import json
+import base64
+from LocalCache import LocalCache
 
 
 HoldStock=NamedTuple("HoldStock", [
@@ -34,6 +38,29 @@ CumulativeSellParams=NamedTuple("CumulativeSellParams", [
     ("days", int),
     ("min_return", float)
 ])
+
+BacktestResult=NamedTuple("BacktestResult", [
+    ("起始日期", str),
+    ("结束日期", str),
+    ("初始资金", float),
+    ("最终资金", float),
+    ("总收益", float),
+    ("总收益率", float),
+    ("胜率", float),
+    ("盈亏比", float),
+    ("交易次数", int),
+    ("夏普比率", float),
+    ("最大回撤", float),
+    ("平均资金使用率", float)
+])
+
+StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [
+    ("策略配置", dict),
+    ("平均收益率", float),
+    ("平均胜率", float),
+    ("周期胜率", float),
+    ("平均最大回撤", float)
+])
 class Strategy:
     def __init__(self, param):
         self.param = param
@@ -52,6 +79,15 @@ class Strategy:
         self.trades_history = []  # 存储所有交易历史
         self.daily_values = []    # 存储每日总资产
         self.calendar = None  # 交易日历实例，由外部传入
+        
+    def reset(self):
+        """重置策略状态，用于多次回测"""
+        self.free_amount = self.init_amount
+        self.hold = []
+        self.trades_history = []
+        self.daily_values = []
+        self.today = None
+        self.picked_data = None
         
         # 在初始化时一次性创建好排序函数，避免重复创建
         # 如果子类实现了get_sort_function则调用，否则设为None
@@ -256,8 +292,8 @@ class Strategy:
                 hold_amount += stock_data.close * hold.buy_count
         
         total_value = hold_amount + self.free_amount
-        # 记录每日总资产（始终记录，用于性能计算）
-        self.daily_values.append({'date': self.today, 'value': total_value})
+        # 记录每日总资产和可用资金（始终记录，用于性能计算）
+        self.daily_values.append({'date': self.today, 'value': total_value, 'free_amount': self.free_amount})
         
         if self.print_log:
             print(f"日期 {self.today} 持有股票总市值 {hold_amount}, 可用资金 {self.free_amount}, 总资产 {total_value}")
@@ -314,6 +350,10 @@ class Strategy:
         # 交易次数
         trade_count = len(self.trades_history)
         
+        # 无风险收益率（年化）
+        RISK_FREE_RATE = 0.02
+        daily_risk_free = RISK_FREE_RATE / 252
+        
         # 计算夏普比率
         if len(self.daily_values) > 1:
             daily_returns = []
@@ -324,14 +364,36 @@ class Strategy:
                 daily_returns.append(daily_return)
             
             if daily_returns:
-                daily_std = np.std(daily_returns)
-                avg_daily_return = np.mean(daily_returns)
-                # 年化夏普比率 = (日均收益率 / 日收益率标准差) * sqrt(252)
-                sharpe_ratio = (avg_daily_return / daily_std * np.sqrt(252)) if daily_std != 0 else 0
+                # 使用几何平均计算日均收益率
+                cumulative_return = 1
+                for ret in daily_returns:
+                    cumulative_return *= (1 + ret)
+                n_days = len(daily_returns)
+                geo_avg_daily_return = cumulative_return ** (1/n_days) - 1 if n_days > 0 else 0
+                
+                # 样本标准差（ddof=1）
+                daily_std = np.std(daily_returns, ddof=1) if len(daily_returns) > 1 else 0
+                
+                # 夏普比率 = (几何平均日收益 - 无风险日收益) / 日波动率 * sqrt(252)
+                excess_return = geo_avg_daily_return - daily_risk_free
+                sharpe_ratio = (excess_return / daily_std * np.sqrt(252)) if daily_std != 0 else 0
             else:
                 sharpe_ratio = 0
         else:
             sharpe_ratio = 0
+        
+        # 计算资金使用率（每日持仓市值 / 总资产）
+        if self.daily_values:
+            utilization_rates = []
+            for dv in self.daily_values:
+                total_value = dv['value']
+                hold_value = total_value - dv['free_amount']
+                utilization = hold_value / total_value if total_value != 0 else 0
+                utilization_rates.append(utilization)
+            
+            avg_utilization = np.mean(utilization_rates)
+        else:
+            avg_utilization = 0
         
         # 计算最大回撤
         if self.daily_values:
@@ -357,7 +419,8 @@ class Strategy:
             'profit_loss_ratio': profit_loss_ratio,
             'trade_count': trade_count,
             'sharpe_ratio': sharpe_ratio,
-            'max_drawdown': max_drawdown
+            'max_drawdown': max_drawdown,
+            'avg_utilization': avg_utilization
         }
     
 
@@ -426,25 +489,75 @@ class UpStrategy(Strategy):
 
 class Chain:
     def __init__(self, param=None):
-        #回测框架参数
         self.strategies = []
         self.date_arr = []
         self.print_report = param.get("print_report", False) if param else False
+        self.cache = LocalCache()
+        self.param = param
 
         if param and "strategy" in param:
             self.strategies = param["strategy"]
         if param and "date_arr" in param:
             self.date_arr = param["date_arr"]
 
-    def execute(self,stock_data,scalendar):
-        # 遍历策略
-        for strategy in self.strategies:
-            strategy.bind_data(stock_data, scalendar)
-            # 遍历日期区间
-            for start_date, end_date in self.date_arr:
-                self.execute_one_strategy(strategy, start_date, end_date,scalendar)
+    
 
-    def execute_one_strategy(self, strategy, start_date, end_date,scalendar):
+    def execute(self, stock_data, scalendar) -> list:
+        cached_df = self.cache.get_csv("a_strategy_results")
+        if cached_df is None:
+            cached_df = pd.DataFrame(columns=['hash', '周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '策略配置'])
+
+        executed_keys = set(cached_df['hash'].tolist()) if 'hash' in cached_df.columns else set()
+
+        new_rows = []
+        for strategy in self.strategies:
+            strategy_config = strategy.param
+            cache_key = hashlib.md5(json.dumps(strategy_config, sort_keys=True).encode('utf-8')).hexdigest()
+
+            if cache_key in executed_keys:
+                print(f"策略配置已执行，跳过：{strategy_config}")
+                continue
+
+            strategy_results = []
+            strategy.reset()
+            strategy.bind_data(stock_data, scalendar)
+
+            for start_date, end_date in self.date_arr:
+                result = self.execute_one_strategy(strategy, start_date, end_date, scalendar)
+                strategy_results.append(result)
+
+            if not strategy_results:
+                continue
+
+            avg_return = round(np.mean([r.总收益率 for r in strategy_results]), 4)
+            avg_win_rate = round(np.mean([r.胜率 for r in strategy_results]), 4)
+            period_win_rate = round(sum(1 for r in strategy_results if r.总收益率 > 0) / len(strategy_results), 4)
+            avg_max_drawdown = round(np.mean([r.最大回撤 for r in strategy_results]), 4)
+
+            new_rows.append({
+                "hash": cache_key,
+                "周期胜率": period_win_rate,
+                "平均胜率": avg_win_rate,
+                "平均收益率": avg_return,
+                "平均最大回撤": avg_max_drawdown,
+                "策略配置": strategy_config
+            })
+
+        if new_rows:
+            new_df = pd.DataFrame(new_rows)
+            new_df = new_df.dropna(how='all')
+            cached_df = pd.concat([cached_df, new_df], ignore_index=True)
+
+        cached_df.sort_values(
+            by=['周期胜率', '平均胜率', '平均最大回撤', '平均收益率'],
+            ascending=[False, False, True, False],
+            inplace=True
+        )
+        self.cache.set_csv("a_strategy_results", cached_df)
+
+        return cached_df.to_dict('records')
+
+    def execute_one_strategy(self, strategy, start_date, end_date,scalendar) -> BacktestResult:
         current_date = scalendar.start(start_date)
         while current_date is not None and current_date <= end_date:
             current_date = scalendar.next()
@@ -454,26 +567,40 @@ class Chain:
             strategy.pick()
             strategy.print_daily()
         
-        # 在策略执行结束后打印性能报告
         perf = strategy.calculate_performance()
-        # 打印策略报告
-        if not self.print_report:
-            return
-        print("=" * 50)
-        print(f"时间周期: {start_date} 至 {end_date}")
-        print(f"资金: {perf['init_amount']:.2f} - > {perf['final_amount']:.2f}")
-        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
-        print(f"胜率: {perf['win_rate']:.2%}")
-        print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
-        print(f"交易次数: {perf['trade_count']}")
-        print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
-        print(f"最大回撤: {perf['max_drawdown']:.2%}")
+        
+        result = BacktestResult(
+             起始日期=start_date,
+             结束日期=end_date,
+             初始资金=perf['init_amount'],
+             最终资金=perf['final_amount'],
+             总收益=perf['total_return'],
+             总收益率=perf['total_return_pct'],
+             胜率=perf['win_rate'],
+             盈亏比=perf['profit_loss_ratio'],
+             交易次数=perf['trade_count'],
+             夏普比率=perf['sharpe_ratio'],
+             最大回撤=perf['max_drawdown'],
+             平均资金使用率=perf['avg_utilization']
+         )
+        
+        if self.print_report:
+            print("=" * 50)
+            print(f"时间周期: {start_date} 至 {end_date}")
+            print(f"资金: {perf['init_amount']:.2f} - > {perf['final_amount']:.2f}")
+            print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
+            print(f"胜率: {perf['win_rate']:.2%}")
+            print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
+            print(f"交易次数: {perf['trade_count']}")
+            print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
+            print(f"最大回撤: {perf['max_drawdown']:.2%}")
+            print(f"资金使用率: {perf['avg_utilization']:.2%}")
+        
+        return result
 
 
         
 if __name__ == "__main__":
-
-
     param={
         "strategy":[UpStrategy({"init_amount":100000,"max_hold_count":5
                                 # 卖出参数：统一使用sell_前缀
@@ -487,11 +614,11 @@ if __name__ == "__main__":
                                 ,"buy_day3_max":10  # 统一使用整数百分比：10表示10%
                                 ,"buy_day5_min":5  # 统一使用整数百分比：5表示5%
                                 ,"buy_day5_max":10  # 统一使用整数百分比：10表示10%
-                                ,"print_log":True
+                                ,"print_log":0
                                 })]
-        # ,"date_arr":[["20250101","20250630"],["20250701","20251231"]]
-        ,"date_arr":[["20250101","20250111"]]
-        ,"print_report":True
+        ,"date_arr":[["20250101","20250201"],["20250201","20250301"],["20250301","20250401"]]
+        # ,"date_arr":[["20250101","20260101"]]
+        ,"print_report":1
     }
     
     start_time=datetime.now().timestamp()*1000
@@ -500,6 +627,7 @@ if __name__ == "__main__":
     stock_data = sd()
     scalendar = sc()
     for i in tqdm(range(1)):
+        # 执行回测
         chain.execute(stock_data,scalendar)
     end_time=datetime.now().timestamp()*1000
     print(f"回测完成 耗时{(end_time-start_time):.2f}ms")
