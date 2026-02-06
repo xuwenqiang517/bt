@@ -116,24 +116,26 @@ class Strategy:
                 
     def doSell(self):pass
 
-    def print(self): 
-        if self.print_log:
-            hold_amount=0
-            for hold in self.hold:
-                stock_data=self.data.get_data_by_date_code(self.today, hold.code)
-                # Check if stock_data is empty (DataFrame with no rows) or None
-                if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
+    def print_daily(self): 
+        # 计算每日总资产（用于性能计算，无论是否打印日志）
+        hold_amount = 0
+        for hold in self.hold:
+            stock_data = self.data.get_data_by_date_code(self.today, hold.code)
+            # Check if stock_data is empty (DataFrame with no rows) or None
+            if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
+                if self.print_log:
                     print(f"日期 {self.today} 持有 {hold.code} 日期:{self.today} 无数据")
-                else:
+            else:
+                if self.print_log:
                     print(f"日期 {self.today} 持有 {hold.code} 日期:{hold.buy_day}->{self.today} 价格{hold.buy_price}->{stock_data.close} 累计涨跌幅: {(stock_data.close - hold.buy_price)/hold.buy_price:.2%} ")
-                    hold_amount += stock_data.close * hold.buy_count
-            
-            total_value = hold_amount + self.free_amount
+                hold_amount += stock_data.close * hold.buy_count
+        
+        total_value = hold_amount + self.free_amount
+        # 记录每日总资产（始终记录，用于性能计算）
+        self.daily_values.append({'date': self.today, 'value': total_value})
+        
+        if self.print_log:
             print(f"日期 {self.today} 持有股票总市值 {hold_amount}, 可用资金 {self.free_amount}, 总资产 {total_value}")
-            
-            # 记录每日总资产
-            self.daily_values.append({'date': self.today, 'value': total_value})
-            
             print("\n")
     
     def update_today(self, today): self.today = today
@@ -221,7 +223,7 @@ class Strategy:
         
         return {
             'init_amount': self.init_amount,
-            'final_amount': self.free_amount,
+            'final_amount': final_total_value,
             'total_return': total_return,
             'total_return_pct': total_return_pct,
             'win_rate': win_rate,
@@ -317,7 +319,7 @@ class Chain:
             strategy.buy()
             strategy.sell()
             strategy.pick()
-            strategy.print()
+            strategy.print_daily()
         
         # 在策略执行结束后打印性能报告
         perf = strategy.calculate_performance()
@@ -325,18 +327,11 @@ class Chain:
         if not self.print_report:
             return
         print("=" * 50)
-        print("策略绩效报告")
-        print("=" * 50)
         print(f"时间周期: {start_date} 至 {end_date}")
-        print(f"期初资金: {perf['init_amount']:.2f}")
-        print(f"期末资金: {perf['final_amount']:.2f}")
-        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%})")
-        print(f"胜率: {perf['win_rate']:.2%}")
-        print(f"盈亏比: {perf['profit_loss_ratio']:.2f}")
-        print(f"交易次数: {perf['trade_count']}")
-        print(f"夏普比率: {perf['sharpe_ratio']:.2f}")
-        print(f"最大回撤: {perf['max_drawdown']:.2%}")
-        print("=" * 50)
+        print(f"期初资金: {perf['init_amount']:.2f} - > 期末资金: {perf['final_amount']:.2f}")
+        print(f"总收益: {perf['total_return']:.2f} ({perf['total_return_pct']:.2%}) 胜率: {perf['win_rate']:.2%}")
+        print(f"盈亏比: {perf['profit_loss_ratio']:.2f} 交易次数: {perf['trade_count']}")
+        print(f"夏普比率: {perf['sharpe_ratio']:.2f} 最大回撤: {perf['max_drawdown']:.2%}")
 
 
         
