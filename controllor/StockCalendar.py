@@ -32,11 +32,37 @@ class StockCalendar:
     def start(self,start_date)->str:
         """
         寻找第一个大于等于 start_date 的交易日，并记录索引
+        使用 date_to_index 字典实现 O(1) 查找
         """
-        for i, row in self.df.iterrows():
-            if row["trade_date"] >= start_date:
-                self.start_index = i
-                return row["trade_date"]
+        if start_date in self.date_to_index:
+            idx = self.date_to_index[start_date]
+            self.start_index = idx
+            return self.df.iloc[idx]["trade_date"]
+        
+        # 如果日期不在日历中，递增日期直到找到
+        year = int(start_date[:4])
+        month = int(start_date[4:6])
+        day = int(start_date[6:8])
+        
+        current = start_date
+        while len(current) == 8:
+            year = int(current[:4])
+            month = int(current[4:6])
+            day = int(current[6:8])
+            next_day = day + 1
+            if next_day > 31:
+                next_day = 1
+                month += 1
+            if month > 12:
+                month = 1
+                year += 1
+            current = f"{year:04d}{month:02d}{next_day:02d}"
+            
+            if current in self.date_to_index:
+                idx = self.date_to_index[current]
+                self.start_index = idx
+                return current
+        
         return None
 
     
