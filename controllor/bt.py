@@ -223,9 +223,12 @@ class Strategy:
                 elif sell_name=="静态止盈": #红色原因
                     need_sell, sell_price, reason = self.stop_profit(hold, stock_data, params)
                     reason=f"\033[91m{reason}\033[0m"
-                elif sell_name=="累计涨幅卖出": #黄色原因
+                elif sell_name=="累计涨幅卖出": #盈利红色 亏损绿色
                     need_sell, sell_price, reason = self.cumulative_return_sell(hold, stock_data, params)
-                    reason=f"\033[93m{reason}\033[0m"
+                    if sell_price>=hold.buy_price:
+                        reason=f"\033[91m{reason}\033[0m"
+                    else:
+                        reason=f"\033[92m{reason}\033[0m"
                 else:
                     if self.debug:
                         print(f"日期 {today} 未知的卖出策略 {sell_name},跳过")
@@ -615,14 +618,18 @@ if __name__ == "__main__":
     strategy_params_list=[]
     for a in range(2,6,1): # 持仓数量
         for buy1 in range(2,4,1): # 连涨天数
-            for buy2 in range(3,10,2): # 3日涨幅最低
-                for buy3 in range(5,15,5): # 3日涨幅最高
+            for buy2 in range(3,6,1): # 3日涨幅最低
+                for buy3 in range(5,15,5): # 3日涨幅最高 且大于3日涨幅最低
+                    if buy2>=buy3: # 3日涨幅最高 必须大于3日涨幅最低
+                        continue
                     for buy4 in range(5,15,3): # 5日涨幅最低
                         for buy5 in range(15,45,5): # 5日涨幅最高
-                            for sell1 in range(5,15,1): # 止损率
+                            if buy4>=buy5: # 5日涨幅最高 必须大于5日涨幅最低
+                                continue
+                            for sell1 in range(-5,-10,-1): # 止损率
                                 for sell2 in range(15,100,5): # 止盈率
                                     for sell3 in range(3,6,1): # 止盈持有时间
-                                        for sell4 in range(10,40,5): # 止盈持有收益率
+                                        for sell4 in range(5,40,5): # 止盈持有收益率
                                             strategy_params_list.append({
                                                 "base_param_arr": [100000, a],
                                                 "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
@@ -635,7 +642,7 @@ if __name__ == "__main__":
     random.shuffle(strategy_params_list)
 
     # 测试 先用1000个策略
-    # strategy_params_list = strategy_params_list[:1000]
+    # strategy_params_list = strategy_params_list[:1]
 
     param={
         "strategy":strategy_params_list
@@ -657,3 +664,4 @@ if __name__ == "__main__":
 
     end_time=datetime.now().timestamp()*1000
     print(f"回测完成 耗时{(end_time-start_time):.2f}ms")
+    print(strategy_params_list)
