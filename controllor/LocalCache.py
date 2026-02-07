@@ -27,6 +27,7 @@ class LocalCache:
         """
         if isinstance(data, pd.DataFrame):
             data.to_csv(self.cache_url / f"{file_path}.csv", index=False)
+            # print(f"缓存成功: {file_path}, 数据形状: {data.shape}")
         else:
             raise ValueError("数据类型必须为pd.DataFrame")
 
@@ -37,7 +38,7 @@ class LocalCache:
         :param file_path: 缓存文件基础路径（无后缀）
         :param data: 待存储数据（支持pd.DataFrame/dict）
         """
-        if isinstance(data, pd.DataFrame):
+        if isinstance(data, pd.DataFrame) and not data.empty:
             data.to_feather(self.cache_url / f"{file_path}")
         else:
             raise ValueError("数据类型必须为pd.DataFrame")

@@ -151,7 +151,7 @@ class StockData:
                 except Exception as e:
                     print(f"Error fetching data for {code}: {e}")
             cache.set(all_cache_file_name,stock_data)
-            # cache.clean(prefix="stock_data_")
+        cache.clean(prefix="stock_data_")
         return stock_data
 
 

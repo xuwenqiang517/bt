@@ -343,12 +343,15 @@ class Strategy:
         """计算并返回策略性能指标"""
         if not self.trades_history and not self.hold:
             return {
+                'init_amount': self.init_amount,
+                'final_amount': self.init_amount,
                 'total_return': 0,
                 'total_return_pct': 0,
                 'win_rate': 0,
                 'profit_loss_ratio': 0,
                 'trade_count': 0,
-                'max_drawdown': 0
+                'max_drawdown': 0,
+                'avg_utilization': 0
             }
         
         # 预加载当日持仓数据到缓存
@@ -513,8 +516,8 @@ class Chain:
                     break
                 results.append(result)
             
-            if not results:
-                continue
+            # if not results:
+            #     continue
             
             if all_win:
                 win_count = len(results)
@@ -535,7 +538,8 @@ class Chain:
             
             executed_keys.add(param_join_str)
 
-            if idx % 10000 == 0:
+            # 跑完了也写一下
+            if idx % 10000 == 0 or idx == total_strategies - 1:
                 if cached_a_df.empty:
                     cached_a_df = temp_a_df.copy()
                 else:
@@ -544,6 +548,9 @@ class Chain:
                             cached_a_df[col] = np.nan
                     cached_a_df = pd.concat([cached_a_df, temp_a_df], ignore_index=True)
                 temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+
+                # cached_a_df 按平均胜率、平均收益率 排序
+                cached_a_df = cached_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
                 self.cache.set_csv("a_strategy_results", cached_a_df)
                 
                 if cached_b_df.empty:
@@ -608,9 +615,9 @@ if __name__ == "__main__":
     strategy_params_list=[]
     for a in range(2,6,1): # 持仓数量
         for buy1 in range(2,4,1): # 连涨天数
-            for buy2 in range(3,10,1): # 3日涨幅最低
+            for buy2 in range(3,10,2): # 3日涨幅最低
                 for buy3 in range(5,15,5): # 3日涨幅最高
-                    for buy4 in range(5,15,1): # 5日涨幅最低
+                    for buy4 in range(5,15,3): # 5日涨幅最低
                         for buy5 in range(15,45,5): # 5日涨幅最高
                             for sell1 in range(5,15,1): # 止损率
                                 for sell2 in range(15,100,5): # 止盈率
@@ -632,7 +639,12 @@ if __name__ == "__main__":
 
     param={
         "strategy":strategy_params_list
-        ,"date_arr":[["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"]]
+        ,"date_arr":[
+            ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
+            ,["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"],["20250601","20250701"]
+            ,["20250701","20250801"],["20250801","20250901"],["20250901","20251001"],["20251001","20251101"],["20251101","20251201"],["20251201","20260101"]
+            ,["20260101","20260201"]
+                     ]
         # ,"date_arr":[["20250101","20260101"]]
         ,"print_report":0
     }
