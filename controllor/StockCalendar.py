@@ -29,21 +29,20 @@ class StockCalendar:
         for idx, row in self.df.iterrows():
             self.date_to_index[row["trade_date"]] = idx
 
-    def start(self,start_date)->str:
+    def start(self, start_date: str) -> int:
         """
-        寻找第一个大于等于 start_date 的交易日，并记录索引
+        寻找第一个大于等于 start_date 的交易日索引
         使用 date_to_index 字典实现 O(1) 查找
         """
         if start_date in self.date_to_index:
             idx = self.date_to_index[start_date]
             self.start_index = idx
-            return self.df.iloc[idx]["trade_date"]
-        
-        # 如果日期不在日历中，递增日期直到找到
+            return idx
+
         year = int(start_date[:4])
         month = int(start_date[4:6])
         day = int(start_date[6:8])
-        
+
         current = start_date
         while len(current) == 8:
             year = int(current[:4])
@@ -57,25 +56,25 @@ class StockCalendar:
                 month = 1
                 year += 1
             current = f"{year:04d}{month:02d}{next_day:02d}"
-            
+
             if current in self.date_to_index:
                 idx = self.date_to_index[current]
                 self.start_index = idx
-                return current
-        
-        return None
+                return idx
 
-    
-    def next(self):
+        return -1
+
+    def next(self, current_idx: int = None) -> int:
         """
-        获取下一个交易日，并更新索引
+        获取下一个交易日索引
         """
-        if self.start_index < len(self.df):
-            self.start_index += 1
-            trade_date = self.df.iloc[self.start_index]["trade_date"]
-            return trade_date
-        else:
-            return None
+        if current_idx is None:
+            current_idx = self.start_index
+        if current_idx < len(self.df) - 1:
+            next_idx = current_idx + 1
+            self.start_index = next_idx
+            return next_idx
+        return -1
 
     def gap(self,start:str,end:str)->int:
         """
@@ -92,39 +91,59 @@ class StockCalendar:
         
         return end_index - start_index + 1
 
-    def build_day_array(self,start:str,duration:int)->list:
+    def get_date(self, idx: int) -> str:
         """
-        从 start 后面所有可用的交易日，按 duration 天拆分成多个区间
-        返回格式: [[start后第1个交易日, start后第duration个交易日], [start后第duration+1个交易日, ...], ...]
+        根据索引获取日期，使用 df.iloc 实现 O(1) 时间复杂度
         """
-        # 找到 start 后面第一个交易日
-        actual_start_idx = None
-        for idx, row in self.df.iterrows():
-            if row["trade_date"] >= start:
-                actual_start_idx = idx
-                break
-        
-        if actual_start_idx is None:
+        if 0 <= idx < len(self.df):
+            return self.df.iloc[idx]["trade_date"]
+        return None
+
+    def build_day_array(self, start: str, end: str, splits: int) -> list:
+        """
+        将 start 到 end 之间的交易日分成 splits 个区间
+        返回格式: [[起始日1, 结束日1], [起始日2, 结束日2], ...]
+        """
+        if start not in self.date_to_index or end not in self.date_to_index:
             return []
-        
-        all_dates = self.df.iloc[actual_start_idx + 1:]["trade_date"].tolist()
-        
+
+        start_idx = self.date_to_index[start]
+        end_idx = self.date_to_index[end]
+
+        if start_idx > end_idx:
+            return []
+
+        all_dates = self.df.iloc[start_idx:end_idx + 1]["trade_date"].tolist()
+
+        if not all_dates:
+            return []
+
+        chunk_size = len(all_dates) // splits
+        remainder = len(all_dates) % splits
+
         result = []
-        for i in range(0, len(all_dates), duration):
-            chunk = all_dates[i:i + duration]
+        current = 0
+        for i in range(splits):
+            if i < remainder:
+                size = chunk_size + 1
+            else:
+                size = chunk_size
+            if size <= 0:
+                break
+            chunk = all_dates[current:current + size]
             if chunk:
                 result.append([chunk[0], chunk[-1]])
-        
+            current += size
+
         return result
 
 if __name__ == "__main__":
     sc=StockCalendar()
-    date=sc.start("20240106")
-    print(f"start date: {date}")
-
-    for _ in range(10):
-        date=sc.next()
-        print(date)
+    day_array=sc.build_day_array("20240701","20260206",6)
+    print(day_array)
+    # for _ in range(10):
+    #     date=sc.next()
+    #     print(date)
     
 
 

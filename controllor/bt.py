@@ -223,12 +223,9 @@ class Strategy:
                 elif sell_name=="静态止盈": #红色原因
                     need_sell, sell_price, reason = self.stop_profit(hold, stock_data, params)
                     reason=f"\033[91m{reason}\033[0m"
-                elif sell_name=="累计涨幅卖出": #盈利红色 亏损绿色
+                elif sell_name=="累计涨幅卖出": #黄色原因
                     need_sell, sell_price, reason = self.cumulative_return_sell(hold, stock_data, params)
-                    if sell_price>=hold.buy_price:
-                        reason=f"\033[91m{reason}\033[0m"
-                    else:
-                        reason=f"\033[92m{reason}\033[0m"
+                    reason=f"\033[93m{reason}\033[0m"
                 else:
                     if self.debug:
                         print(f"日期 {today} 未知的卖出策略 {sell_name},跳过")
@@ -473,7 +470,7 @@ class Chain:
     def __init__(self, param=None):
         self.strategies = param["strategy"]  # 策略列表
         self.date_arr = param["date_arr"]  # 回测时间周期列表
-        self.print_report = param.get("print_report", False)  # 是否打印报告
+        self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
         self.cache = LocalCache()  # 本地缓存
         self.param = param  # 原始参数
         self.stock_data = sd()  # 股票数据源
@@ -507,14 +504,14 @@ class Chain:
                 [strategy.base_param_arr[1]], strategy.buy_param_arr, strategy.sell_param_arr
             ])
 
-            if param_join_str in executed_keys:
+            if param_join_str in executed_keys and not self.chain_debug:
                 continue
 
             results = []
             all_win = True
             for s, e in self.date_arr:
                 result = self.execute_one_strategy(strategy, s, e)
-                if result.总收益率 <= 0:
+                if result.总收益率 <= 0 and not self.chain_debug:
                     all_win = False
                     break
                 results.append(result)
@@ -538,7 +535,8 @@ class Chain:
                 temp_a_df.loc[len(temp_a_df)] = new_row
             else:
                 temp_b_df.loc[len(temp_b_df)] = {"配置": param_join_str}
-            
+            if self.chain_debug:
+                print(new_row)
             executed_keys.add(param_join_str)
 
             # 跑完了也写一下
@@ -565,21 +563,35 @@ class Chain:
 
 
     def execute_one_strategy(self, strategy, start_date, end_date) -> BacktestResult:
-        scalendar=self.calendar
-        current_date = scalendar.start(start_date)
-        strategy.bind(self.stock_data,self.calendar)
-        # 重置策略状态（每个时间周期独立开始）
+        scalendar = self.calendar
+        current_idx = scalendar.start(start_date)
+        end_idx = scalendar.start(end_date)
+        if current_idx == -1 or end_idx == -1:
+            return BacktestResult(
+                起始日期=start_date,
+                结束日期=end_date,
+                初始资金=0,
+                最终资金=0,
+                总收益=0,
+                总收益率=0,
+                胜率=0,
+                盈亏比=0,
+                交易次数=0,
+                最大回撤=0,
+                平均资金使用率=0
+            )
+        strategy.bind(self.stock_data, self.calendar)
         strategy.reset()
-        
-        while current_date is not None and current_date <= end_date:
-            current_date = scalendar.next()
+
+        while current_idx != -1 and current_idx <= end_idx:
+            current_date = scalendar.get_date(current_idx)
             strategy.update_today(current_date)
-            # 新一天开始，清空缓存
             strategy._new_day()
             strategy.buy()
             strategy.sell()
             strategy.pick()
             strategy.print_daily()
+            current_idx = scalendar.next(current_idx)
         
         perf = strategy.calculate_performance()
         
@@ -597,7 +609,7 @@ class Chain:
              平均资金使用率=perf['avg_utilization']
          )
         
-        if self.print_report:
+        if self.chain_debug:
             print("=" * 50)
             print(f"时间周期: {start_date} 至 {end_date}")
             print(f"资金: {perf['init_amount']:.2f} - > {perf['final_amount']:.2f}")
@@ -611,22 +623,17 @@ class Chain:
         return result
 
 
-        
-if __name__ == "__main__":
-    start_time=datetime.now().timestamp()*1000
+
+def bt_all(day_array):
     # 定义策略参数字典列表（不创建对象，省内存）
     strategy_params_list=[]
     for a in range(2,6,1): # 持仓数量
         for buy1 in range(2,4,1): # 连涨天数
-            for buy2 in range(3,6,1): # 3日涨幅最低
-                for buy3 in range(5,15,5): # 3日涨幅最高 且大于3日涨幅最低
-                    if buy2>=buy3: # 3日涨幅最高 必须大于3日涨幅最低
-                        continue
+            for buy2 in range(3,10,2): # 3日涨幅最低
+                for buy3 in range(5,15,5): # 3日涨幅最高
                     for buy4 in range(5,15,3): # 5日涨幅最低
                         for buy5 in range(15,45,5): # 5日涨幅最高
-                            if buy4>=buy5: # 5日涨幅最高 必须大于5日涨幅最低
-                                continue
-                            for sell1 in range(-5,-10,-1): # 止损率
+                            for sell1 in range(5,15,1): # 止损率
                                 for sell2 in range(15,100,5): # 止盈率
                                     for sell3 in range(3,6,1): # 止盈持有时间
                                         for sell4 in range(5,40,5): # 止盈持有收益率
@@ -640,28 +647,61 @@ if __name__ == "__main__":
     
     # 随机打散
     random.shuffle(strategy_params_list)
+    random.shuffle(strategy_params_list)
+    random.shuffle(strategy_params_list)
 
     # 测试 先用1000个策略
     # strategy_params_list = strategy_params_list[:1]
+    
 
+    
     param={
         "strategy":strategy_params_list
-        ,"date_arr":[
-            ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
-            ,["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"],["20250601","20250701"]
-            ,["20250701","20250801"],["20250801","20250901"],["20250901","20251001"],["20251001","20251101"],["20251101","20251201"],["20251201","20260101"]
-            ,["20260101","20260201"]
-                     ]
-        # ,"date_arr":[["20250101","20260101"]]
-        ,"print_report":0
+        ,"date_arr":day_array
+        ,"chain_debug":0
     }
-    
+        # ,"date_arr":[
+        #     ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
+        #     ,["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"],["20250601","20250701"]
+        #     ,["20250701","20250801"],["20250801","20250901"],["20250901","20251001"],["20251001","20251101"],["20251101","20251201"],["20251201","20260101"]
+        #     ,["20260101","20260201"]
+        #              ]
+        # ,"date_arr":[["20250101","20260101"]]
     chain = Chain(param=param)
-    for i in tqdm(range(1)):
-        # 执行回测
-        chain.execute()
+    chain.execute()
+
+def bt_one(strategy_params,day_array):
+    base_arr, buy_arr, sell_arr = strategy_params.split("|")
+    a= int(base_arr.split(",")[0])
+    buy1, buy2, buy3, buy4, buy5 = map(int, buy_arr.split(","))
+    sell1, sell2, sell3, sell4 = map(int, sell_arr.split(","))
+    
+    strategy_params_list=[]
+    strategy_params_list.append({
+        "base_param_arr": [100000, a],
+        "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
+        "sell_param_arr": [sell1, sell2, sell3, sell4],
+        "debug": 0
+    })
+    param={
+        "strategy":strategy_params_list
+        ,"date_arr":day_array
+        ,"chain_debug":1
+    }
+    chain = Chain(param=param)
+    chain.execute()
+
+
+if __name__ == "__main__":
+    start_time=datetime.now().timestamp()*1000
+    
+
+    day_array=sc().build_day_array("20240701","20260206",6)
+    # bt_all(day_array)
+
+    # 100%(6/6),48%,17.70%,23.14%,124.0,49.20%,
+    bt_one("4|2,5,10,8,15|11,60,5,25",day_array)
 
 
     end_time=datetime.now().timestamp()*1000
     print(f"回测完成 耗时{(end_time-start_time):.2f}ms")
-    print(strategy_params_list)
