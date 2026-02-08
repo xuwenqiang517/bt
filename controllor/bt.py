@@ -158,6 +158,8 @@ class Strategy:
         
         if self.debug:
             print(f"日期 {self.today} 选出股票 {len(filtered_stocks)} 只")
+            print(f"前5只 {result.head(5)}")
+
         
         return result
     
@@ -274,9 +276,9 @@ class Strategy:
         #计算止损价
         stop_loss_price=round(hold.buy_price * (1 + params.rate), 2)
         if stock_data.open <= stop_loss_price:
-            return True, stock_data.open,f"开盘价{stock_data.open}<{stop_loss_price}({params.rate:.2%}),以开盘价{stock_data.open}卖出"
+            return True, stock_data.open,f"开盘价{stock_data.open}<{stop_loss_price}({abs(params.rate):.2%}),以开盘价{stock_data.open}卖出"
         elif stock_data.low <= stop_loss_price:
-            return True, stop_loss_price,f"盘中最低价{stock_data.low}<{stop_loss_price}({params.rate:.2%}),以止损价{stop_loss_price}卖出"
+            return True, stop_loss_price,f"盘中最低价{stock_data.low}<{stop_loss_price}({abs(params.rate):.2%}),以止损价{stop_loss_price}卖出"
         return False, 0, ""
     
     def stop_profit(self, hold:HoldStock, stock_data:pd.DataFrame,params:StopProfitParams)->tuple:
@@ -446,6 +448,7 @@ class UpStrategy(Strategy):
             n = min(max_hold, len(df))
             if n <= 0:
                 return pd.DataFrame()
+            
             vol_rank_values = df["vol_rank"].values
             top_n_indices = np.argpartition(vol_rank_values, n-1)[:n]
             sorted_indices = top_n_indices[np.argsort(vol_rank_values[top_n_indices])]
@@ -475,13 +478,14 @@ class Chain:
         self.param = param  # 原始参数
         self.stock_data = sd()  # 股票数据源
         self.calendar = sc()  # 交易日历
+        self.result_file = param.get("result_file", None)  # 结果文件
 
     def execute(self) -> list:
-        cached_a_df = self.cache.get_csv("a_strategy_results")
+        cached_a_df = self.cache.get_csv(f"a_{self.result_file}")
         if cached_a_df is None:
             cached_a_df = pd.DataFrame(columns=RESULT_COLS_A)
         
-        cached_b_df = self.cache.get_csv("b_strategy_results")
+        cached_b_df = self.cache.get_csv(f"b_{self.result_file}")
         if cached_b_df is None:
             cached_b_df = pd.DataFrame(columns=RESULT_COLS_B)
         
@@ -552,14 +556,14 @@ class Chain:
 
                 # cached_a_df 按平均胜率、平均收益率 排序
                 cached_a_df = cached_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
-                self.cache.set_csv("a_strategy_results", cached_a_df)
+                self.cache.set_csv(f"a_{self.result_file}", cached_a_df)
                 
                 if cached_b_df.empty:
                     cached_b_df = temp_b_df.copy()
                 else:
                     cached_b_df = pd.concat([cached_b_df, temp_b_df], ignore_index=True)
                 temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
-                self.cache.set_csv("b_strategy_results", cached_b_df)
+                self.cache.set_csv(f"b_{self.result_file}", cached_b_df)
 
 
     def execute_one_strategy(self, strategy, start_date, end_date) -> BacktestResult:
@@ -624,7 +628,7 @@ class Chain:
 
 
 
-def bt_all(day_array):
+def bt_all(day_array,result_file):
     # 定义策略参数字典列表（不创建对象，省内存）
     strategy_params_list=[]
     for a in range(2,6,1): # 持仓数量
@@ -633,7 +637,7 @@ def bt_all(day_array):
                 for buy3 in range(5,15,5): # 3日涨幅最高
                     for buy4 in range(5,15,3): # 5日涨幅最低
                         for buy5 in range(15,45,5): # 5日涨幅最高
-                            for sell1 in range(5,15,1): # 止损率
+                            for sell1 in range(-15,-4,1): # 止损率（负数，如-5表示-5%）
                                 for sell2 in range(15,100,5): # 止盈率
                                     for sell3 in range(3,6,1): # 止盈持有时间
                                         for sell4 in range(5,40,5): # 止盈持有收益率
@@ -659,6 +663,7 @@ def bt_all(day_array):
         "strategy":strategy_params_list
         ,"date_arr":day_array
         ,"chain_debug":0
+        ,"result_file":result_file
     }
         # ,"date_arr":[
         #     ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
@@ -670,7 +675,7 @@ def bt_all(day_array):
     chain = Chain(param=param)
     chain.execute()
 
-def bt_one(strategy_params,day_array):
+def bt_one(strategy_params,day_array,result_file):
     base_arr, buy_arr, sell_arr = strategy_params.split("|")
     a= int(base_arr.split(",")[0])
     buy1, buy2, buy3, buy4, buy5 = map(int, buy_arr.split(","))
@@ -681,12 +686,13 @@ def bt_one(strategy_params,day_array):
         "base_param_arr": [100000, a],
         "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
         "sell_param_arr": [sell1, sell2, sell3, sell4],
-        "debug": 0
+        "debug": 1
     })
     param={
         "strategy":strategy_params_list
         ,"date_arr":day_array
         ,"chain_debug":1
+        ,"result_file":result_file
     }
     chain = Chain(param=param)
     chain.execute()
@@ -695,12 +701,17 @@ def bt_one(strategy_params,day_array):
 if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     
+    start_date="20240701"
+    end_date="20260206"
+    part=6
+    day_array=sc().build_day_array(start_date,end_date,part)
 
-    day_array=sc().build_day_array("20240701","20260206",6)
-    # bt_all(day_array)
+    result_file=f"连涨{start_date}-{end_date}-{part}-vol_rank正排"
+
+    bt_all(day_array,result_file)
 
     # 100%(6/6),48%,17.70%,23.14%,124.0,49.20%,
-    bt_one("4|2,5,10,8,15|11,60,5,25",day_array)
+    # bt_one("4|2,5,10,8,15|-11,60,5,25",day_array,result_file)
 
 
     end_time=datetime.now().timestamp()*1000
