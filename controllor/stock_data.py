@@ -1,5 +1,4 @@
 from datetime import date,datetime
-import time
 import akshare as ak
 from local_cache import LocalCache as lc
 import pandas as pd
@@ -33,12 +32,6 @@ class StockData:
         # 一层dict，日期+pl
         print(f"3. 构建数据索引")
         self.date_df_dict=self.convert(stock_data_df)
-
-        # 二层dict，日期+code+list
-        print(f"4. 构建数据双重索引")
-        start_time=time.time()
-        self.data_index=self.build_index(self.date_df_dict)
-        print(f"5. 数据索引构建完成 耗时 {time.time()-start_time:.2f}ms")
         # print(len(stock_data_df))
         # print(stock_data_df.tail())
 
@@ -50,13 +43,11 @@ class StockData:
         else:
             print(f"没有找到日期 {today} 的股票数据")
             return pl.DataFrame()
-    def get_data_by_date_code(self,today,code):
-        if today in self.data_index:
-            if code in self.data_index[today]:
-                return self.data_index[today][code]
-            else:
-                # print(f"没有找到日期 {today} 股票代码 {code} 的股票数据")
-                return pl.DataFrame()
+    def get_data_by_date_code(self,today,code)->pl.DataFrame:
+        if today in self.date_df_dict:
+            df = self.date_df_dict[today]
+            filtered_df = df.filter(pl.col("code") == code)
+            return filtered_df
         else:
             # print(f"没有找到日期 {today} 的股票数据")
             return pl.DataFrame()
@@ -76,28 +67,7 @@ class StockData:
         
         return date_dict
     
-    def build_index(self,date_df_dict)->dict[str,dict[str,StockDataTuple]]:
-        """
-        优化版：无groupby，单行直接映射为命名元组
-        适用于单日数据中 code 唯一的场景
-        """
-        index_dict = {}
-        for date, daily_df in tqdm(date_df_dict.items(), desc="构建索引"):
-            # 核心：直接用字典推导式，一行一个股票，无需分组
-            # 只处理Polars DataFrame
-            code_dict = {
-                row["code"]: StockDataTuple(
-                    code=row["code"],
-                    open=row["open"],
-                    high=row["high"],
-                    low=row["low"],
-                    close=row["close"],
-                    change_pct=row["change_pct"]
-                )
-                for row in daily_df.to_dicts()
-            }
-            index_dict[date] = code_dict
-        return index_dict
+
     
     def get_stock_list(self,today,cache):
         cache_file_name="stock_list_"+today

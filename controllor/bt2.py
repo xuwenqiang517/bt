@@ -83,14 +83,14 @@ if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     
     day_array=sc().get_date_arr()
-    # day_array=[["20250101","20250201"]]
+    day_array=[["20250101","20250201"]]
 
     result_file=f"连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-vol_rank正排"
 
     bt_all(day_array,result_file)
 
     # 100%(6/6),48%,17.70%,23.14%,124.0,49.20%,
-    # bt_one("4|2,5,10,8,15|-11,60,5,25",day_array,result_file)
+    # bt_one("4|3,3,10,8,25|-5,35,3,5",day_array,result_file)
 
 
     end_time=datetime.now().timestamp()*1000

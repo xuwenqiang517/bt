@@ -32,6 +32,28 @@ class LocalCache:
         else:
             raise ValueError("数据类型必须为pd.DataFrame")
 
+    def get_csv_pl(self, file_path):
+        """
+        从本地缓存中读取CSV文件并转换为Polars DataFrame
+        :param file_path: 缓存文件基础路径（无后缀）
+        :return: 读取的Polars DataFrame或None（如果文件不存在）
+        """
+        try:
+            return pl.read_csv(self.cache_url / f"{file_path}.csv")
+        except FileNotFoundError:
+            return None
+            
+    def set_csv_pl(self, file_path, data):
+        """
+        缓存Polars DataFrame到本地CSV文件
+        :param file_path: 缓存文件基础路径（无后缀）
+        :param data: 待存储Polars DataFrame
+        """
+        if isinstance(data, pl.DataFrame) and not data.is_empty():
+            data.write_csv(self.cache_url / f"{file_path}.csv")
+        else:
+            raise ValueError("数据类型必须为pl.DataFrame")
+
         
     def set(self, file_path, data):
         """

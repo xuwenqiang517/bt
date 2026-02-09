@@ -1,39 +1,27 @@
-import random
 import concurrent.futures
-import time
-from pathlib import Path
-import os
-from typing import List, Tuple, Dict, Any
+from typing import List,  Dict, Any
 
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
-import pandas as pd
 import numpy as np
 import polars as pl
 import matplotlib.pyplot as plt
-# 设置 Matplotlib 后端为非交互式的 'agg'，以支持在多线程环境中使用
 plt.switch_backend('agg')
 from tqdm import tqdm
 from local_cache import LocalCache
 
 from dto import *
 from strategy_impl import *
-# 回测结果CSV列名
-RESULT_COLS_A = ['周期胜率', '平均胜率', '平均收益率', '平均交易次数', '最大资金', '最小资金', '夏普比率', '平均资金使用率', '配置']
-RESULT_COLS_B = ['配置']
-
 
 class Chain:
     def __init__(self, param=None):
         self.strategies = param["strategy"]  # 策略列表
         self.date_arr = param["date_arr"]  # 回测时间周期列表
         self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
-        self.win_rate_threshold = param.get("win_rate_threshold", 0.75)  # 胜率阈值，默认65%
+        self.win_rate_threshold = param.get("win_rate_threshold", 0.9)  # 胜率阈值，默认65%
         self.thread_count = param.get("thread_count", 1)  # 线程数，默认1
         
         self.param = param  # 原始参数
-        self.stock_data = sd()  # 股票数据源
-        self.calendar = sc()  # 交易日历
         self.result_file = param.get("result_file", None)  # 结果文件
 
     def _draw_fund_trend(self, daily_values, title):
@@ -107,44 +95,34 @@ class Chain:
 
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
         """处理一组策略"""
-        print(f"进程 {thread_id} 开始处理，策略数: {len(strategy_group)}")
+        # 设置进程名称
+        import multiprocessing
+        import setproctitle
+        current_process = multiprocessing.current_process()
+        process_name = f"ChainProcess-{thread_id}"
+        current_process.name = process_name
+        setproctitle.setproctitle(process_name)
+        print(f"进程 {thread_id} ({process_name}) 开始处理，策略数: {len(strategy_group)}")
         # 为每个线程创建独立的缓存
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
         
+        # 在子进程中初始化 stock_data 和 calendar
+        stock_data = sd()
+        calendar = sc()
+        
         # 加载线程本地缓存
-        cached_a_df = cache.get_csv(f"a_{thread_result_file}")
+        cached_a_df = cache.get_csv_pl(f"a_{thread_result_file}")
         if cached_a_df is None:
             # 明确指定列类型，避免类型不兼容问题
-            cached_a_df = pl.DataFrame({
-                '周期胜率': pl.Series([], dtype=pl.String),
-                '平均胜率': pl.Series([], dtype=pl.String),
-                '平均收益率': pl.Series([], dtype=pl.String),
-                '平均交易次数': pl.Series([], dtype=pl.Float64),
-                '最大资金': pl.Series([], dtype=pl.Float64),
-                '最小资金': pl.Series([], dtype=pl.Float64),
-                '夏普比率': pl.Series([], dtype=pl.Float64),
-                '平均资金使用率': pl.Series([], dtype=pl.String),
-                '配置': pl.Series([], dtype=pl.String)
-            })
-        else:
-            cached_a_df = pl.from_pandas(cached_a_df)
-        
-        cached_b_df = cache.get_csv(f"b_{thread_result_file}")
-        if cached_b_df is None:
-            cached_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
-        else:
-            cached_b_df = pl.from_pandas(cached_b_df)
+            cached_a_df = self._create_empty_a_df()
         
         # 获取已执行的策略键
         executed_keys = set()
         if '配置' in cached_a_df.columns:
             executed_keys.update(cached_a_df['配置'].to_list())
-        if '配置' in cached_b_df.columns:
-            executed_keys.update(cached_b_df['配置'].to_list())
         
         temp_a_data = []
-        temp_b_data = []
         processed_count = 0
         batch_size = 1000
         
@@ -163,7 +141,7 @@ class Chain:
             all_daily_values = []
             
             for s, e in self.date_arr:
-                result = self.execute_one_strategy(strategy, s, e)
+                result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
                 if result.总收益率 > 0:
@@ -176,20 +154,8 @@ class Chain:
             
             actual_win_rate = successful_count / len(results) if results else 0
             if actual_win_rate >= self.win_rate_threshold and len(results) == total_periods:
-                new_row = {
-                    "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
-                    "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
-                    "平均收益率": f"{np.mean([x.总收益率 for x in results]) * 100:.2f}%",
-                    "平均交易次数": float(round(np.mean([x.交易次数 for x in results]), 1)),
-                    "最大资金": float(round(max([x.最大资金 for x in results]), 1)),
-                    "最小资金": float(round(min([x.最小资金 for x in results]), 1)),
-                    "夏普比率": float(round(np.mean([x.夏普比率 for x in results]), 2)),
-                    "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in results]) * 100:.2f}%",
-                    "配置": cache_key
-                }
+                new_row = self._create_new_row(actual_win_rate, successful_count, total_periods, results, cache_key)
                 temp_a_data.append(new_row)
-            else:
-                temp_b_data.append({"配置": cache_key})
             
             if self.chain_debug:
                 if 'new_row' in locals():
@@ -206,22 +172,7 @@ class Chain:
                     temp_a_df = pl.DataFrame(temp_a_data)
                 else:
                     # 明确指定列类型，避免类型不兼容问题
-                    temp_a_df = pl.DataFrame({
-                        '周期胜率': pl.Series([], dtype=pl.String),
-                        '平均胜率': pl.Series([], dtype=pl.String),
-                        '平均收益率': pl.Series([], dtype=pl.String),
-                        '平均交易次数': pl.Series([], dtype=pl.Float64),
-                        '最大资金': pl.Series([], dtype=pl.Float64),
-                        '最小资金': pl.Series([], dtype=pl.Float64),
-                        '夏普比率': pl.Series([], dtype=pl.Float64),
-                        '平均资金使用率': pl.Series([], dtype=pl.String),
-                        '配置': pl.Series([], dtype=pl.String)
-                    })
-                
-                if temp_b_data:
-                    temp_b_df = pl.DataFrame(temp_b_data)
-                else:
-                    temp_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
+                    temp_a_df = self._create_empty_a_df()
                 
                 # 保存线程本地缓存
                 if not temp_a_df.is_empty():
@@ -236,47 +187,23 @@ class Chain:
                         cached_a_df = pl.concat([cached_a_df, temp_a_df], rechunk=True)
                     # 排序
                     cached_a_df = cached_a_df.sort(
-                        by=['平均胜率', '平均收益率'], 
-                        descending=[True, True]
+                        by=['周期胜率','平均胜率', '平均收益率'], 
+                        descending=[True,True, True]
                     )
-                    # 转换为pandas DataFrame以保存到缓存
-                    cache.set_csv(f"a_{thread_result_file}", cached_a_df.to_pandas())
-                
-                if not temp_b_df.is_empty():
-                    if cached_b_df.is_empty():
-                        cached_b_df = temp_b_df.clone()
-                    else:
-                        cached_b_df = pl.concat([cached_b_df, temp_b_df], rechunk=True)
-                    # 转换为pandas DataFrame以保存到缓存
-                    cache.set_csv(f"b_{thread_result_file}", cached_b_df.to_pandas())
+                    # 保存到缓存
+                    cache.set_csv_pl(f"a_{thread_result_file}", cached_a_df)
                 
                 # 清空临时数据，准备下一批
                 temp_a_data = []
-                temp_b_data = []
         
         # 处理剩余的策略数据
-        if temp_a_data or temp_b_data:
+        if temp_a_data:
             # 转换为Polars DataFrame
             if temp_a_data:
                 temp_a_df = pl.DataFrame(temp_a_data)
             else:
                 # 明确指定列类型，避免类型不兼容问题
-                temp_a_df = pl.DataFrame({
-                    '周期胜率': pl.Series([], dtype=pl.String),
-                    '平均胜率': pl.Series([], dtype=pl.String),
-                    '平均收益率': pl.Series([], dtype=pl.String),
-                    '平均交易次数': pl.Series([], dtype=pl.Float64),
-                    '最大资金': pl.Series([], dtype=pl.Float64),
-                    '最小资金': pl.Series([], dtype=pl.Float64),
-                    '夏普比率': pl.Series([], dtype=pl.Float64),
-                    '平均资金使用率': pl.Series([], dtype=pl.String),
-                    '配置': pl.Series([], dtype=pl.String)
-                })
-            
-            if temp_b_data:
-                temp_b_df = pl.DataFrame(temp_b_data)
-            else:
-                temp_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
+                temp_a_df = self._create_empty_a_df()
             
             # 保存线程本地缓存
             if not temp_a_df.is_empty():
@@ -291,67 +218,60 @@ class Chain:
                     cached_a_df = pl.concat([cached_a_df, temp_a_df], rechunk=True)
                 # 排序
                 cached_a_df = cached_a_df.sort(
-                    by=['平均胜率', '平均收益率'], 
-                    descending=[True, True]
+                    by=['周期胜率','平均胜率', '平均收益率'], 
+                    descending=[True, True, True]
                 )
-                # 转换为pandas DataFrame以保存到缓存
-                cache.set_csv(f"a_{thread_result_file}", cached_a_df.to_pandas())
-            
-            if not temp_b_df.is_empty():
-                if cached_b_df.is_empty():
-                    cached_b_df = temp_b_df.clone()
-                else:
-                    cached_b_df = pl.concat([cached_b_df, temp_b_df], rechunk=True)
-                # 转换为pandas DataFrame以保存到缓存
-                cache.set_csv(f"b_{thread_result_file}", cached_b_df.to_pandas())
+                # 保存到缓存
+                cache.set_csv_pl(f"a_{thread_result_file}", cached_a_df)
 
+    def _create_empty_a_df(self) -> pl.DataFrame:
+        """创建空的a文件DataFrame"""
+        return pl.DataFrame({
+            '周期胜率': pl.Series([], dtype=pl.String),
+            '平均胜率': pl.Series([], dtype=pl.String),
+            '平均收益率': pl.Series([], dtype=pl.String),
+            '平均交易次数': pl.Series([], dtype=pl.Float64),
+            '最大资金': pl.Series([], dtype=pl.Float64),
+            '最小资金': pl.Series([], dtype=pl.Float64),
+            '夏普比率': pl.Series([], dtype=pl.Float64),
+            '平均资金使用率': pl.Series([], dtype=pl.String),
+            '配置': pl.Series([], dtype=pl.String)
+        })
+    
+    def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str) -> dict:
+        """创建新的行数据"""
+        return {
+            "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
+            "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
+            "平均收益率": f"{np.mean([x.总收益率 for x in results]) * 100:.2f}%",
+            "平均交易次数": float(round(np.mean([x.交易次数 for x in results]), 1)),
+            "最大资金": float(round(max([x.最大资金 for x in results]), 1)),
+            "最小资金": float(round(min([x.最小资金 for x in results]), 1)),
+            "夏普比率": float(round(np.mean([x.夏普比率 for x in results]), 2)),
+            "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in results]) * 100:.2f}%",
+            "配置": cache_key
+        }
+    
     def _merge_thread_caches(self) -> None:
         """合并所有线程的缓存文件"""
         cache = LocalCache()
         
         # 加载主缓存
-        main_a_df = cache.get_csv(f"a_{self.result_file}")
+        main_a_df = cache.get_csv_pl(f"a_{self.result_file}")
         if main_a_df is None:
             # 明确指定列类型，避免类型不兼容问题
-            main_a_df = pl.DataFrame({
-                '周期胜率': pl.Series([], dtype=pl.String),
-                '平均胜率': pl.Series([], dtype=pl.String),
-                '平均收益率': pl.Series([], dtype=pl.String),
-                '平均交易次数': pl.Series([], dtype=pl.Float64),
-                '最大资金': pl.Series([], dtype=pl.Float64),
-                '最小资金': pl.Series([], dtype=pl.Float64),
-                '夏普比率': pl.Series([], dtype=pl.Float64),
-                '平均资金使用率': pl.Series([], dtype=pl.String),
-                '配置': pl.Series([], dtype=pl.String)
-            })
-        else:
-            main_a_df = pl.from_pandas(main_a_df)
-        
-        main_b_df = cache.get_csv(f"b_{self.result_file}")
-        if main_b_df is None:
-            main_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
-        else:
-            main_b_df = pl.from_pandas(main_b_df)
+            main_a_df = self._create_empty_a_df()
         
         # 合并所有线程的缓存
         for thread_id in range(self.thread_count):
             thread_result_file = f"{self.result_file}_thread_{thread_id}"
             
             # 合并a文件
-            thread_a_df = cache.get_csv(f"a_{thread_result_file}")
-            if thread_a_df is not None and not thread_a_df.empty:
-                thread_a_df = pl.from_pandas(thread_a_df)
+            thread_a_df = cache.get_csv_pl(f"a_{thread_result_file}")
+            if thread_a_df is not None and not thread_a_df.is_empty():
                 main_a_df = pl.concat([main_a_df, thread_a_df], rechunk=True)
                 # 删除已合并的线程缓存文件
                 cache.delete_file(f"a_{thread_result_file}.csv")
-            
-            # 合并b文件
-            thread_b_df = cache.get_csv(f"b_{thread_result_file}")
-            if thread_b_df is not None and not thread_b_df.empty:
-                thread_b_df = pl.from_pandas(thread_b_df)
-                main_b_df = pl.concat([main_b_df, thread_b_df], rechunk=True)
-                # 删除已合并的线程缓存文件
-                cache.delete_file(f"b_{thread_result_file}.csv")
         
         # 去重并排序
         if not main_a_df.is_empty():
@@ -360,13 +280,8 @@ class Chain:
                 by=['平均胜率', '平均收益率'], 
                 descending=[True, True]
             )
-            # 转换为pandas DataFrame以保存到缓存
-            cache.set_csv(f"a_{self.result_file}", main_a_df.to_pandas())
-        
-        if not main_b_df.is_empty():
-            main_b_df = main_b_df.unique(subset=['配置'])
-            # 转换为pandas DataFrame以保存到缓存
-            cache.set_csv(f"b_{self.result_file}", main_b_df.to_pandas())
+            # 保存到缓存
+            cache.set_csv_pl(f"a_{self.result_file}", main_a_df)
         
         print(f"合并完成，主文件 a_{self.result_file}.csv 包含 {len(main_a_df)} 条记录")
 
@@ -376,35 +291,15 @@ class Chain:
         
         # 初始化主缓存
         cache = LocalCache()
-        main_a_df = cache.get_csv(f"a_{self.result_file}")
+        main_a_df = cache.get_csv_pl(f"a_{self.result_file}")
         if main_a_df is None:
             # 明确指定列类型，避免类型不兼容问题
-            main_a_df = pl.DataFrame({
-                '周期胜率': pl.Series([], dtype=pl.String),
-                '平均胜率': pl.Series([], dtype=pl.String),
-                '平均收益率': pl.Series([], dtype=pl.String),
-                '平均交易次数': pl.Series([], dtype=pl.Float64),
-                '最大资金': pl.Series([], dtype=pl.Float64),
-                '最小资金': pl.Series([], dtype=pl.Float64),
-                '夏普比率': pl.Series([], dtype=pl.Float64),
-                '平均资金使用率': pl.Series([], dtype=pl.String),
-                '配置': pl.Series([], dtype=pl.String)
-            })
-        else:
-            main_a_df = pl.from_pandas(main_a_df)
-        
-        main_b_df = cache.get_csv(f"b_{self.result_file}")
-        if main_b_df is None:
-            main_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
-        else:
-            main_b_df = pl.from_pandas(main_b_df)
+            main_a_df = self._create_empty_a_df()
         
         # 获取已执行的策略键
         executed_keys = set()
         if '配置' in main_a_df.columns:
             executed_keys.update(main_a_df['配置'].to_list())
-        if '配置' in main_b_df.columns:
-            executed_keys.update(main_b_df['配置'].to_list())
         
         # 过滤掉已执行的策略（如果不是调试模式）
         remaining_strategies = []
@@ -431,20 +326,27 @@ class Chain:
             print(f"进程 {i} 处理策略数: {len(remaining_strategies[start_idx:end_idx])}")
         
         # 并行处理
-        print(f"创建进程池，最大进程数: {self.thread_count}")
-        with concurrent.futures.ProcessPoolExecutor(max_workers=self.thread_count) as executor:
-            print("提交任务到进程池...")
-            future_to_group = {executor.submit(self._process_strategy_group, group, i): i for i, group in enumerate(strategy_groups)}
-            print(f"已提交 {len(future_to_group)} 个任务到进程池")
-            
-            print("等待进程完成...")
-            for future in concurrent.futures.as_completed(future_to_group):
-                thread_id = future_to_group[future]
-                try:
-                    future.result()
-                    print(f"进程 {thread_id} 处理完成")
-                except Exception as exc:
-                    print(f"进程 {thread_id} 处理失败: {exc}")
+        import multiprocessing
+        print(f"创建进程，最大进程数: {self.thread_count}")
+        processes = []
+        
+        # 创建并启动进程
+        for i, group in enumerate(strategy_groups):
+            process_name = f"ChainProcess-{i}"
+            process = multiprocessing.Process(
+                target=self._process_strategy_group,
+                args=(group, i),
+                name=process_name
+            )
+            processes.append(process)
+            process.start()
+            print(f"启动进程: {process_name}，处理策略数: {len(group)}")
+        
+        # 等待所有进程完成
+        print("等待进程完成...")
+        for i, process in enumerate(processes):
+            process.join()
+            print(f"进程 {i} ({process.name}) 处理完成")
         
         # 所有策略执行完成后，合并所有线程的缓存
         self._merge_thread_caches()
@@ -453,8 +355,9 @@ class Chain:
         return
 
 
-    def execute_one_strategy(self, strategy, start_date, end_date) -> BacktestResult:
-        scalendar = self.calendar
+    def execute_one_strategy(self, strategy, start_date, end_date, stock_data, calendar) -> BacktestResult:
+        """执行单个策略"""
+        scalendar = calendar
         current_idx = scalendar.start(start_date)
         end_idx = scalendar.start(end_date)
         
@@ -462,7 +365,7 @@ class Chain:
         if current_idx == -1 or end_idx == -1:
             raise ValueError(f"Invalid date range: {start_date} to {end_date}")
         
-        strategy.bind(self.stock_data, self.calendar)
+        strategy.bind(stock_data, calendar)
         strategy.reset()
 
         while current_idx != -1 and current_idx <= end_idx:

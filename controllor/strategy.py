@@ -6,6 +6,9 @@ import polars as pl
 
 from dto import *
 
+# 全局常量
+EMPTY_STRING = ""
+
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
 class Strategy:
@@ -279,11 +282,18 @@ class Strategy:
         """
         #计算止损价
         stop_loss_price = int(hold.buy_price * (1 + params.rate))
-        if stock_data.open <= stop_loss_price:
-            return True, stock_data.open, f"开盘价{stock_data.open/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以开盘价{stock_data.open/100:.2f}卖出"
-        elif stock_data.low <= stop_loss_price:
-            return True, stop_loss_price, f"盘中最低价{stock_data.low/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以止损价{stop_loss_price/100:.2f}卖出"
-        return False, 0, ""
+        # 缓存常用值
+        open_price = stock_data['open'][0]
+        low_price = stock_data['low'][0]
+        if open_price <= stop_loss_price:
+            if self.debug:
+                return True, open_price, f"开盘价{open_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以开盘价{open_price/100:.2f}卖出"
+            return True, open_price, EMPTY_STRING
+        elif low_price <= stop_loss_price:
+            if self.debug:
+                return True, stop_loss_price, f"盘中最低价{low_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以止损价{stop_loss_price/100:.2f}卖出"
+            return True, stop_loss_price, EMPTY_STRING
+        return False, 0, EMPTY_STRING
     
     def stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame, params: StopProfitParams) -> tuple[bool, int, str]:
         """
@@ -291,11 +301,18 @@ class Strategy:
         """
         #计算止盈价
         stop_profit_price = int(hold.buy_price * (1 + params.rate))
-        if stock_data.open >= stop_profit_price:
-            return True, stock_data.open, f"开盘价{stock_data.open/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以开盘价{stock_data.open/100:.2f}卖出"
-        elif stock_data.high >= stop_profit_price:
-            return True, stop_profit_price, f"盘中最高价{stock_data.high/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以止盈价{stop_profit_price/100:.2f}卖出"
-        return False, 0, ""
+        # 缓存常用值
+        open_price = stock_data['open'][0]
+        high_price = stock_data['high'][0]
+        if open_price >= stop_profit_price:
+            if self.debug:
+                return True, open_price, f"开盘价{open_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以开盘价{open_price/100:.2f}卖出"
+            return True, open_price, EMPTY_STRING
+        elif high_price >= stop_profit_price:
+            if self.debug:
+                return True, stop_profit_price, f"盘中最高价{high_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以止盈价{stop_profit_price/100:.2f}卖出"
+            return True, stop_profit_price, EMPTY_STRING
+        return False, 0, EMPTY_STRING
 
     def cumulative_return_sell(self, hold: HoldStock, stock_data: pl.DataFrame, params: CumulativeSellParams) -> tuple[bool, int, str]:
         """
@@ -306,14 +323,19 @@ class Strategy:
         hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
         # 如果持仓天数小于x天，不触发卖出
         if hold_days < params.days:
-            return False, 0, ""
+            return False, 0, EMPTY_STRING
+        # 缓存常用值
+        close_price = stock_data['close'][0]
+        open_price = stock_data['open'][0]
         # 计算累计涨幅
-        cumulative_return = (stock_data.close - hold.buy_price) / hold.buy_price
+        cumulative_return = (close_price - hold.buy_price) / hold.buy_price
         # 如果累计涨幅没达到最小要求，以开盘价卖出
         if cumulative_return < params.min_return:
-            return True, stock_data.open, f"持仓{params.days}天 累计涨幅{cumulative_return:.2%}<{params.min_return:.2%}，以开盘价{stock_data.open/100:.2f}卖出"
+            if self.debug:
+                return True, open_price, f"持仓{params.days}天 累计涨幅{cumulative_return:.2%}<{params.min_return:.2%}，以开盘价{open_price/100:.2f}卖出"
+            return True, open_price, EMPTY_STRING
         
-        return False, 0, ""
+        return False, 0, EMPTY_STRING
 
     def settle_amount(self) -> None:
         """计算每日总资产并记录"""
@@ -340,7 +362,7 @@ class Strategy:
                 if debug:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
             else:
-                close_price = stock_data.close
+                close_price = stock_data['close'][0]
                 buy_price = hold_stock.buy_price
                 buy_count = hold_stock.buy_count
                 
@@ -414,7 +436,7 @@ class Strategy:
                 # 如果今天没有数据，使用买入价格作为估值
                 final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
             else:
-                final_holdings_value += stock_data.close * hold_stock.buy_count
+                final_holdings_value += stock_data['close'][0] * hold_stock.buy_count
         
         # 最终总价值（分）
         free_amount = self.free_amount
