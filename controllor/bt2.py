@@ -76,7 +76,7 @@ def bt_one(strategy_params,day_array,result_file):
     
     strategy_params_list=[]
     strategy_params_list.append({
-        "base_param_arr": [100000, a],
+        "base_param_arr": [10000000, a],
         "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
         "sell_param_arr": [sell1, sell2, sell3, sell4],
         "debug": 1
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     
     day_array=sc().get_date_arr()
-    # day_array=[["20250101","20260101"]]
+    day_array=[["20250101","20260101"]]
 
     result_file=f"连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-vol_rank正排"
 

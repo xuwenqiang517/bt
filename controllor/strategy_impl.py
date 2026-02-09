@@ -1,5 +1,5 @@
-import pandas as pd
 import numpy as np
+import polars as pl
 
 from dto import *
 from strategy import Strategy
@@ -16,32 +16,26 @@ class UpStrategy(Strategy):
         buy_day5_min = self.buy_param_arr[3]
         buy_day5_max = self.buy_param_arr[4]
         
-        def filter_func(df: pd.DataFrame) -> np.ndarray:
-            col_consecutive = df["consecutive_up_days"].values
-            col_change3d = df["change_3d"].values
-            col_change5d = df["change_5d"].values
+        def filter_func(df: pl.DataFrame) -> pl.Series:
             return (
-                (col_consecutive >= buy_up_day_min)
-                & (col_change3d >= buy_day3_min)
-                & (col_change3d <= buy_day3_max)
-                & (col_change5d >= buy_day5_min)
-                & (col_change5d <= buy_day5_max)
+                (df["consecutive_up_days"] >= buy_up_day_min)
+                & (df["change_3d"] >= buy_day3_min)
+                & (df["change_3d"] <= buy_day3_max)
+                & (df["change_5d"] >= buy_day5_min)
+                & (df["change_5d"] <= buy_day5_max)
             )
         self._pick_filter = filter_func
     
-    def _init_pick_sorter(self):
-        max_hold = self.max_hold_count
+    # def _init_pick_sorter(self):
+    #     max_hold = self.max_hold_count
         
-        def sorter_func(df: pd.DataFrame) -> pd.DataFrame:
-            n = min(max_hold, len(df))
-            if n <= 0:
-                return pd.DataFrame()
+    #     def sorter_func(df: pl.DataFrame) -> pl.DataFrame:
+    #         n = min(max_hold, len(df))
+    #         if n <= 0:
+    #             return pl.DataFrame()
             
-            vol_rank_values = df["vol_rank"].values
-            top_n_indices = np.argpartition(vol_rank_values, n-1)[:n]
-            sorted_indices = top_n_indices[np.argsort(vol_rank_values[top_n_indices])]
-            return df.iloc[sorted_indices].reset_index(drop=True)
-        self._pick_sorter = sorter_func
+    #         return df.sort("vol_rank").head(n).with_row_count().drop("row_nr")
+    #     self._pick_sorter = sorter_func
     
     def init_sell_strategy_chain(self):
         sl, sp, cd, cr = self.sell_param_arr

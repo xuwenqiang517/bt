@@ -17,10 +17,10 @@ RESULT_COLS_B = ['配置']
 
 HoldStock=NamedTuple("HoldStock", [
     ("code", str),
-    ("buy_price", float),
+    ("buy_price", int),
     ("buy_count", int),
     ("buy_day", str),
-    ("sell_price", float),
+    ("sell_price", int),
     ("sell_day", str)
 ])
 

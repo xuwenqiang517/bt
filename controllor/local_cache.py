@@ -1,5 +1,6 @@
 from pathlib import Path
 import pandas as pd
+import polars as pl
 import os
 import msgpack
 
@@ -49,6 +50,28 @@ class LocalCache:
             return pd.read_feather(self.cache_url / f"{file_path}")
         except Exception as e:
             return None
+
+    def get_pl(self, file_path):
+        """
+        从本地缓存中读取Polars DataFrame
+        :param file_path: 缓存文件基础路径（无后缀）
+        :return: 读取的Polars DataFrame或None（如果文件不存在）
+        """
+        try:
+            return pl.read_parquet(self.cache_url / f"{file_path}")
+        except Exception as e:
+            return None
+
+    def set_pl(self, file_path, data):
+        """
+        缓存Polars DataFrame到本地
+        :param file_path: 缓存文件基础路径（无后缀）
+        :param data: 待存储Polars DataFrame
+        """
+        if isinstance(data, pl.DataFrame) and not data.is_empty():
+            data.write_parquet(self.cache_url / f"{file_path}")
+        else:
+            raise ValueError("数据类型必须为pl.DataFrame")
         
 
     def clean(self,prefix="",ignore=[]):
@@ -78,3 +101,13 @@ if __name__ == "__main__":
     lc.set("test__",df)
     print(f"df2:{lc.get('test__')}")
     
+    # 测试 Polars DataFrame 缓存功能
+    pl_df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+    lc.set_pl("test_pl__", pl_df)
+    print(f"pl_df2:{lc.get_pl('test_pl__')}")
+    
+
+    # 测试pl存取
+    pl_df = pl.DataFrame(df)
+    lc.set_pl("test_pl__", pl_df)
+    print(f"pl_df2:{lc.get_pl('test_pl__')}")
