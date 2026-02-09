@@ -56,7 +56,7 @@ def bt_all(day_array,result_file):
         ,"date_arr":day_array
         ,"chain_debug":0
         ,"result_file":result_file
-        ,"thread_count":1
+        ,"thread_count":4
     }
         # ,"date_arr":[
         #     ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
