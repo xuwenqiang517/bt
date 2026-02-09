@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 from typing import NamedTuple
 
-from StockCalendar import StockCalendar as sc
-from StockData import StockData as sd
+from controllor.stock_calendar import StockCalendar as sc
+from controllor.stock_data import StockData as sd
 
 
 class StockPicker:

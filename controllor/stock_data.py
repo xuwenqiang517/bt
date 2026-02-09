@@ -1,9 +1,7 @@
-from calendar import c
 from datetime import date,datetime
 import time
 import akshare as ak
-from regex import T
-from LocalCache import LocalCache as lc
+from local_cache import LocalCache as lc
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
