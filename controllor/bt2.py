@@ -56,6 +56,7 @@ def bt_all(day_array,result_file):
         ,"date_arr":day_array
         ,"chain_debug":0
         ,"result_file":result_file
+        ,"thread_count":1
     }
         # ,"date_arr":[
         #     ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
@@ -93,18 +94,15 @@ def bt_one(strategy_params,day_array,result_file):
 if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     
-    start_date="20240701"
-    end_date="20260206"
-    part=6
     day_array=sc().get_date_arr()
-    day_array=[["20250101","20260101"]]
+    # day_array=[["20250101","20260101"]]
 
-    result_file=f"连涨{start_date}-{end_date}-{part}-vol_rank正排"
+    result_file=f"连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-vol_rank正排"
 
-    # bt_all(day_array,result_file)
+    bt_all(day_array,result_file)
 
     # 100%(6/6),48%,17.70%,23.14%,124.0,49.20%,
-    bt_one("4|2,5,10,8,15|-11,60,5,25",day_array,result_file)
+    # bt_one("4|2,5,10,8,15|-11,60,5,25",day_array,result_file)
 
 
     end_time=datetime.now().timestamp()*1000

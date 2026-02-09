@@ -57,6 +57,21 @@ class LocalCache:
                 if (self.cache_url / file).exists():
                     os.remove(self.cache_url / file)
     
+    def delete_file(self, file_name):
+        """
+        删除指定的缓存文件
+        :param file_name: 要删除的文件名（包含后缀）
+        :return: 是否删除成功
+        """
+        try:
+            file_path = self.cache_url / file_name
+            if file_path.exists():
+                os.remove(file_path)
+                return True
+            return False
+        except Exception as e:
+            return False
+    
 if __name__ == "__main__":
     lc=LocalCache()
     df=pd.DataFrame({"a":[1,2,3],"b":[4,5,6]})

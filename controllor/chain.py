@@ -1,4 +1,9 @@
 import random
+import concurrent.futures
+import time
+from pathlib import Path
+import os
+from typing import List, Tuple, Dict, Any
 
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
@@ -21,6 +26,7 @@ class Chain:
         self.date_arr = param["date_arr"]  # 回测时间周期列表
         self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
         self.win_rate_threshold = param.get("win_rate_threshold", 0.65)  # 胜率阈值，默认65%
+        self.thread_count = param.get("thread_count", 1)  # 线程数，默认1
         
         self.param = param  # 原始参数
         self.stock_data = sd()  # 股票数据源
@@ -135,38 +141,58 @@ class Chain:
         else:
             cached_b_df = pd.concat([cached_b_df, temp_b_df], ignore_index=True)
         cache.set_csv(f"b_{self.result_file}", cached_b_df)
-
-    def execute(self) -> list:
-        cache, cached_a_df, cached_b_df, executed_keys, temp_a_df, temp_b_df = self._init_cache()
-        total_strategies = len(self.strategies)
-        print(f"总策略数: {total_strategies}, 已缓存: {len(executed_keys)}")
+    
+    def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
+        """处理一组策略"""
+        # 为每个线程创建独立的缓存
+        cache = LocalCache()
+        thread_result_file = f"{self.result_file}_thread_{thread_id}"
         
-        for idx, params in tqdm(enumerate(self.strategies), desc="执行策略", total=total_strategies):
-            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]],params.get('buy_param_arr'),params.get('sell_param_arr')])
-            if cache_key in executed_keys and not self.chain_debug:
+        # 加载线程本地缓存
+        cached_a_df = cache.get_csv(f"a_{thread_result_file}")
+        if cached_a_df is None:
+            cached_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+        
+        cached_b_df = cache.get_csv(f"b_{thread_result_file}")
+        if cached_b_df is None:
+            cached_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        
+        # 获取已执行的策略键
+        executed_keys = set(cached_a_df['配置'].tolist()) if '配置' in cached_a_df.columns else set()
+        b_keys = set(cached_b_df['配置'].tolist()) if '配置' in cached_b_df.columns else set()
+        executed_keys.update(b_keys)
+        
+        temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+        temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        
+        # 处理策略组，添加进度条
+        for params in tqdm(strategy_group, desc=f"线程 {thread_id} 执行策略", total=len(strategy_group)):
+            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
+            if cache_key in executed_keys:
                 continue
+            
             strategy = UpStrategy(**params)
             results = []
             total_periods = len(self.date_arr)
-            max_failures_allowed = int(total_periods * (1 - self.win_rate_threshold))  # 计算允许的最大失败次数
+            max_failures_allowed = int(total_periods * (1 - self.win_rate_threshold))
             failure_count = 0
-            successful_count = 0  # Track successful results during the loop to avoid duplicate calculation
-            all_daily_values = []  # 保存所有日期范围的daily_values
+            successful_count = 0
+            all_daily_values = []
+            
             for s, e in self.date_arr:
                 result = self.execute_one_strategy(strategy, s, e)
-                # 保存当前日期范围的daily_values
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
                 if result.总收益率 > 0:
                     successful_count += 1
-                else:  
-                    failure_count += 1 
+                else:
+                    failure_count += 1
                     if failure_count > max_failures_allowed and not self.chain_debug:
                         break
                 results.append(result)
+            
             actual_win_rate = successful_count / len(results) if results else 0
             if actual_win_rate >= self.win_rate_threshold and len(results) == total_periods:
-                # 达到胜率阈值且完成了所有周期，写入a文件
                 new_row = {
                     "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
                     "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
@@ -181,18 +207,133 @@ class Chain:
                 temp_a_df.loc[len(temp_a_df)] = new_row
             else:
                 temp_b_df.loc[len(temp_b_df)] = {"配置": cache_key}
+            
             if self.chain_debug:
                 if 'new_row' in locals():
-                    print(new_row)
-                # 绘制资金变化图表
-                self._draw_fund_trend(all_daily_values, f'策略资金变化趋势 - {cache_key}')
+                    print(f"线程 {thread_id}: {new_row}")
+                self._draw_fund_trend(all_daily_values, f'线程 {thread_id} - 策略资金变化趋势 - {cache_key}')
+            
             executed_keys.add(cache_key)
-            if idx % 100000 == 0:
-                self._save_cache(cache, cached_a_df, cached_b_df, temp_a_df, temp_b_df)
-                temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
-                temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
-        if not temp_a_df.empty or not temp_b_df.empty:
-            self._save_cache(cache, cached_a_df, cached_b_df, temp_a_df, temp_b_df)
+        
+        # 保存线程本地缓存
+        if not temp_a_df.empty:
+            if cached_a_df.empty:
+                cached_a_df = temp_a_df.copy()
+            else:
+                cached_a_df = pd.concat([cached_a_df, temp_a_df], ignore_index=True)
+            cached_a_df = cached_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
+            cache.set_csv(f"a_{thread_result_file}", cached_a_df)
+        
+        if not temp_b_df.empty:
+            if cached_b_df.empty:
+                cached_b_df = temp_b_df.copy()
+            else:
+                cached_b_df = pd.concat([cached_b_df, temp_b_df], ignore_index=True)
+            cache.set_csv(f"b_{thread_result_file}", cached_b_df)
+
+    def _merge_thread_caches(self) -> None:
+        """合并所有线程的缓存文件"""
+        cache = LocalCache()
+        
+        # 加载主缓存
+        main_a_df = cache.get_csv(f"a_{self.result_file}")
+        if main_a_df is None:
+            main_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+        
+        main_b_df = cache.get_csv(f"b_{self.result_file}")
+        if main_b_df is None:
+            main_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        
+        # 合并所有线程的缓存
+        for thread_id in range(self.thread_count):
+            thread_result_file = f"{self.result_file}_thread_{thread_id}"
+            
+            # 合并a文件
+            thread_a_df = cache.get_csv(f"a_{thread_result_file}")
+            if thread_a_df is not None and not thread_a_df.empty:
+                main_a_df = pd.concat([main_a_df, thread_a_df], ignore_index=True)
+                # 删除已合并的线程缓存文件
+                cache.delete_file(f"a_{thread_result_file}.csv")
+            
+            # 合并b文件
+            thread_b_df = cache.get_csv(f"b_{thread_result_file}")
+            if thread_b_df is not None and not thread_b_df.empty:
+                main_b_df = pd.concat([main_b_df, thread_b_df], ignore_index=True)
+                # 删除已合并的线程缓存文件
+                cache.delete_file(f"b_{thread_result_file}.csv")
+        
+        # 去重并排序
+        if not main_a_df.empty:
+            main_a_df = main_a_df.drop_duplicates(subset=['配置'])
+            main_a_df = main_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
+            cache.set_csv(f"a_{self.result_file}", main_a_df)
+        
+        if not main_b_df.empty:
+            main_b_df = main_b_df.drop_duplicates(subset=['配置'])
+            cache.set_csv(f"b_{self.result_file}", main_b_df)
+        
+        print(f"合并完成，主文件 a_{self.result_file}.csv 包含 {len(main_a_df)} 条记录")
+
+    def execute(self) -> list:
+        # 先合并所有线程的缓存，确保中断后再运行时能正确加载之前的结果
+        self._merge_thread_caches()
+        
+        # 初始化主缓存
+        cache = LocalCache()
+        main_a_df = cache.get_csv(f"a_{self.result_file}")
+        if main_a_df is None:
+            main_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+        
+        main_b_df = cache.get_csv(f"b_{self.result_file}")
+        if main_b_df is None:
+            main_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        
+        # 获取已执行的策略键
+        executed_keys = set(main_a_df['配置'].tolist()) if '配置' in main_a_df.columns else set()
+        b_keys = set(main_b_df['配置'].tolist()) if '配置' in main_b_df.columns else set()
+        executed_keys.update(b_keys)
+        
+        # 过滤掉已执行的策略
+        remaining_strategies = []
+        for s in self.strategies:
+            cache_key = "|".join(",".join(map(str, arr)) for arr in [[s.get('base_param_arr')[1]], s.get('buy_param_arr'), s.get('sell_param_arr')])
+            if cache_key not in executed_keys:
+                remaining_strategies.append(s)
+        
+        total_strategies = len(remaining_strategies)
+        print(f"总策略数: {len(self.strategies)}, 已执行: {len(self.strategies) - total_strategies}, 剩余: {total_strategies}")
+        print(f"使用线程数: {self.thread_count}")
+        
+        if total_strategies == 0:
+            print("所有策略已执行完毕，无需处理")
+            return
+        
+        # 策略分组
+        group_size = total_strategies // self.thread_count
+        strategy_groups = []
+        for i in range(self.thread_count):
+            start_idx = i * group_size
+            end_idx = (i + 1) * group_size if i < self.thread_count - 1 else total_strategies
+            strategy_groups.append(remaining_strategies[start_idx:end_idx])
+            print(f"线程 {i} 处理策略数: {len(remaining_strategies[start_idx:end_idx])}")
+        
+        # 并行处理
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count) as executor:
+            future_to_group = {executor.submit(self._process_strategy_group, group, i): i for i, group in enumerate(strategy_groups)}
+            
+            for future in concurrent.futures.as_completed(future_to_group):
+                thread_id = future_to_group[future]
+                try:
+                    future.result()
+                    print(f"线程 {thread_id} 处理完成")
+                except Exception as exc:
+                    print(f"线程 {thread_id} 处理失败: {exc}")
+        
+        # 所有策略执行完成后，合并所有线程的缓存
+        self._merge_thread_caches()
+        
+        print("所有策略执行完成")
+        return
 
 
     def execute_one_strategy(self, strategy, start_date, end_date) -> BacktestResult:
