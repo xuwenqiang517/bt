@@ -50,9 +50,10 @@ BacktestResult=NamedTuple("BacktestResult", [
     ("总收益", float),
     ("总收益率", float),
     ("胜率", float),
-    ("盈亏比", float),
     ("交易次数", int),
-    ("最大回撤", float),
+    ("最大资金", float),
+    ("最小资金", float),
+    ("夏普比率", float),
     ("平均资金使用率", float)
 ])
 

@@ -3,28 +3,29 @@ from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from dto import *
 
 class Strategy:
+    # 策略映射，避免重复的条件判断
+    STRATEGY_MAP = {
+        "静态止损": "stop_loss",
+        "静态止盈": "stop_profit",
+        "累计涨幅卖出": "cumulative_return_sell"
+    }
+    
     def __init__(self, base_param_arr, sell_param_arr, buy_param_arr, debug):
         self.base_param_arr = base_param_arr
         self.sell_param_arr = sell_param_arr
         self.buy_param_arr = buy_param_arr
         self.init_amount, self.max_hold_count = base_param_arr[0], base_param_arr[1]
-        self.free_amount = self.init_amount
-        self.hold = []
-        self.hold_codes = set()
         self.data = None
         self.calendar = None
-        self.today = None
-        self.picked_data = None
-        self.trades_history = []
-        self.daily_values = []
         self.debug = debug
-        self._today_data_cache = {}
         self._init_pick_filter()
         self._init_pick_sorter()
+        self.reset()
         
         if self.max_hold_count is None or self.init_amount is None:
             print(f"策略未配置最大持仓数max_hold_count或初始资金init_amount,结束任务")
@@ -32,19 +33,17 @@ class Strategy:
     
     def _init_pick_filter(self):
         """初始化筛选函数，子类重写"""
-        self._pick_filter = self._default_pick_filter
-    
-    def _default_pick_filter(self, df: pd.DataFrame) -> np.ndarray:
-        """默认筛选：返回所有股票"""
-        return np.ones(len(df), dtype=bool)
-    
+        def default_filter(df: pd.DataFrame) -> np.ndarray:
+            """默认筛选：返回所有股票"""
+            return np.ones(len(df), dtype=bool)
+        self._pick_filter = default_filter
+
     def _init_pick_sorter(self):
         """初始化排序函数，子类重写"""
-        self._pick_sorter = self._default_pick_sorter
-    
-    def _default_pick_sorter(self, df: pd.DataFrame) -> pd.DataFrame:
-        """默认排序：返回原数据"""
-        return df
+        def default_sorter(df: pd.DataFrame) -> pd.DataFrame:
+            """默认排序：返回原数据"""
+            return df
+        self._pick_sorter = default_sorter
     
     def bind(self,data:sd,calendar:sc):
         self.data=data
@@ -58,10 +57,6 @@ class Strategy:
         self.trades_history = []
         self.daily_values = []
         self.today = None
-        self._today_data_cache = {}
-        self._new_day()
-
-    def _new_day(self):
         self._today_data_cache = {}
     
     def _ensure_today_data_loaded(self):
@@ -86,24 +81,18 @@ class Strategy:
     
     def pick(self)->pd.DataFrame: 
         today_stock_df = self.data.get_data_by_date(self.today)
-        
         mask = self._pick_filter(today_stock_df)
         filtered_stocks = today_stock_df[mask]
-        
         if filtered_stocks is None or filtered_stocks.empty:
             self.picked_data = pd.DataFrame()
             if self.debug:
                 print(f"日期 {self.today} 无符合条件股票")
             return pd.DataFrame()
-        
         self.picked_data = filtered_stocks
         result = self._pick_sorter(filtered_stocks)
-        
         if self.debug:
             print(f"日期 {self.today} 选出股票 {len(filtered_stocks)} 只")
             print(f"前5只 {result.head(5)}")
-
-        
         return result
     
 
@@ -140,9 +129,7 @@ class Strategy:
     def sell(self):
         if not self.hold:
             return
-        
         today=self.today
-        
         # 预加载当日所有持仓股票数据（消除重复调用）
         self._ensure_today_data_loaded()
         
@@ -161,25 +148,19 @@ class Strategy:
             for sell_strategy in self.sell_chain_list:
                 sell_name = sell_strategy.name
                 params = sell_strategy.params
-                
-                if sell_name=="静态止损": # 绿色原因
-                    need_sell, sell_price, reason = self.stop_loss(hold, stock_data, params)
-                    reason=f"\033[92m{reason}\033[0m"
-                elif sell_name=="静态止盈": #红色原因
-                    need_sell, sell_price, reason = self.stop_profit(hold, stock_data, params)
-                    reason=f"\033[91m{reason}\033[0m"
-                elif sell_name=="累计涨幅卖出": #黄色原因
-                    need_sell, sell_price, reason = self.cumulative_return_sell(hold, stock_data, params)
-                    reason=f"\033[93m{reason}\033[0m"
-                else:
-                    if self.debug:
-                        print(f"日期 {today} 未知的卖出策略 {sell_name},跳过")
-                    continue
-                
+                # 使用类属性策略映射查找方法名
+                method_name = self.STRATEGY_MAP.get(sell_name)
+                if not method_name:
+                    raise ValueError(f"未知的卖出策略: {sell_name}")
+                # 获取对应的方法对象
+                strategy_func = getattr(self, method_name)
+                # 调用对应的策略函数
+                need_sell, sell_price, reason = strategy_func(hold, stock_data, params)
+                # 设置颜色
+                reason=f"\033[91m{reason}\033[0m" if sell_price>hold.buy_price else f"\033[92m{reason}\033[0m"
                 # 如果某个策略触发卖出，则不再检查其他策略
                 if need_sell:
                     break
-                    
             if need_sell:
                 sells_info.append((code, sell_price, reason))
         
@@ -187,7 +168,6 @@ class Strategy:
             return
         
         # 批量处理卖出
-        sell_codes = {s[0] for s in sells_info}
         for code, sell_price, sell_reason in sells_info:
             hold = self._remove_hold(code)
             if hold:
@@ -207,7 +187,6 @@ class Strategy:
                     'profit_rate': profit_rate,
                     'reason': sell_reason
                 })
-                
                 if self.debug:
                     print(f"日期 {self.today} 卖出 {code} {hold.buy_day}->{self.today} {hold.buy_price} -> {sell_price} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {self.free_amount}")
                 
@@ -243,25 +222,20 @@ class Strategy:
         """
         # 直接使用StockCalendar的gap函数计算持仓天数
         hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        
         # 如果持仓天数小于x天，不触发卖出
         if hold_days < params.days:
             return False, 0, ""
-        
         # 计算累计涨幅
         cumulative_return = (stock_data.close - hold.buy_price) / hold.buy_price
-        
         # 如果累计涨幅没达到最小要求，以开盘价卖出
         if cumulative_return < params.min_return:
             return True, stock_data.open, f"持仓{params.days}天 累计涨幅{cumulative_return:.2%}<{params.min_return:.2%}，以开盘价{stock_data.open}卖出"
         
         return False, 0, ""
 
-
-    def print_daily(self): 
+    def settle_amount(self): 
         # 计算每日总资产（使用缓存，避免重复获取数据）
         hold_amount = 0
-        
         for hold in self.hold:
             stock_data = self._today_data_cache.get(hold.code)
             if stock_data is None or (hasattr(stock_data, 'empty') and stock_data.empty):
@@ -279,25 +253,28 @@ class Strategy:
             print(f"日期 {self.today} 持有股票总市值 {hold_amount}, 可用资金 {self.free_amount}, 总资产 {total_value}")
             print("\n")
     
-    def update_today(self, today): self.today = today
-    # def bind_data(self, data, calendar=None): 
-    #     self.data = data
-    #     self.calendar = calendar
+    def update_today(self, today):
+        self.today = today
+        self._today_data_cache = {}
     
-    def calculate_performance(self):
+    def calculate_performance(self, start_date, end_date):
         """计算并返回策略性能指标"""
+        
         if not self.trades_history and not self.hold:
-            return {
-                'init_amount': self.init_amount,
-                'final_amount': self.init_amount,
-                'total_return': 0,
-                'total_return_pct': 0,
-                'win_rate': 0,
-                'profit_loss_ratio': 0,
-                'trade_count': 0,
-                'max_drawdown': 0,
-                'avg_utilization': 0
-            }
+            return BacktestResult(
+                起始日期=start_date,
+                结束日期=end_date,
+                初始资金=self.init_amount,
+                最终资金=self.init_amount,
+                总收益=0,
+                总收益率=0,
+                胜率=0,
+                交易次数=0,
+                最大资金=self.init_amount,
+                最小资金=self.init_amount,
+                夏普比率=0,
+                平均资金使用率=0
+            )
         
         # 预加载当日持仓数据到缓存
         self._ensure_today_data_loaded()
@@ -325,11 +302,6 @@ class Strategy:
         winning_trades = [p for p in profits if p > 0]
         win_rate = len(winning_trades) / len(profits) if profits else 0
 
-        # 计算盈亏比
-        avg_win = sum(winning_trades) / len(winning_trades) if winning_trades else 0
-        avg_loss = sum(-p for p in profits if p < 0) / len([p for p in profits if p < 0]) if any(p < 0 for p in profits) else 1
-        profit_loss_ratio = avg_win / avg_loss if avg_loss != 0 else 0
-
         # 交易次数
         trade_count = len(profits)
 
@@ -338,23 +310,38 @@ class Strategy:
         hold_values = [dv['value'] - dv['free_amount'] for dv in self.daily_values]
         avg_utilization = np.mean([h/v for v, h in zip(values, hold_values) if v != 0]) if values else 0
 
-        # 计算最大回撤
-        peak, max_drawdown = values[0] if values else 0, 0
-        for v in values[1:]:
-            if v > peak:
-                peak = v
-            dd = (peak - v) / peak if peak != 0 else 0
-            max_drawdown = max(max_drawdown, dd)
+        # 计算最大资金和最小资金
+        max_value = max(values) if values else self.init_amount
+        min_value = min(values) if values else self.init_amount
         
-        return {
-            'init_amount': self.init_amount,
-            'final_amount': final_total_value,
-            'total_return': total_return,
-            'total_return_pct': total_return_pct,
-            'win_rate': win_rate,
-            'profit_loss_ratio': profit_loss_ratio,
-            'trade_count': trade_count,
-            'max_drawdown': max_drawdown,
-            'avg_utilization': avg_utilization
-        }
+        # 计算夏普比率
+        sharpe_ratio = 0
+        if len(values) > 1:
+            # 计算每日收益率
+            daily_returns = [(values[i] - values[i-1]) / values[i-1] for i in range(1, len(values))]
+            if daily_returns:
+                # 假设无风险利率为0
+                risk_free_rate = 0
+                avg_daily_return = np.mean(daily_returns)
+                std_daily_return = np.std(daily_returns)
+                if std_daily_return > 0:
+                    # 年化夏普比率（假设一年252个交易日）
+                    sharpe_ratio = (avg_daily_return - risk_free_rate) / std_daily_return * np.sqrt(252)
+        
+
+        
+        return BacktestResult(
+            起始日期=start_date,
+            结束日期=end_date,
+            初始资金=self.init_amount,
+            最终资金=final_total_value,
+            总收益=total_return,
+            总收益率=total_return_pct,
+            胜率=win_rate,
+            交易次数=trade_count,
+            最大资金=max_value,
+            最小资金=min_value,
+            夏普比率=sharpe_ratio,
+            平均资金使用率=avg_utilization
+        )
     
