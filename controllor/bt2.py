@@ -95,7 +95,7 @@ if __name__ == "__main__":
     start_time=datetime.now().timestamp()*1000
     
     day_array=sc().get_date_arr()
-    day_array=[["20250101","20260101"]]
+    # day_array=[["20250101","20250201"]]
 
     result_file=f"连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-vol_rank正排"
 

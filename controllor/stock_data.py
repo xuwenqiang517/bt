@@ -21,9 +21,10 @@ StockDataTuple = NamedTuple("StockDataTuple", [
 
 class StockData:
     def __init__(self):
+        from datetime import timedelta
         today=date.today().strftime("%Y%m%d")
         if datetime.now().hour < 15:
-            today=(date.today()-pd.Timedelta(days=1)).strftime("%Y%m%d")
+            today=(date.today()-timedelta(days=1)).strftime("%Y%m%d")
         cache=lc()
         print(f"1. 获取股票列表")
         stock_list_df=self.get_stock_list(today,cache)
@@ -37,7 +38,7 @@ class StockData:
         print(f"4. 构建数据双重索引")
         start_time=time.time()
         self.data_index=self.build_index(self.date_df_dict)
-        print(f"5. 数据索引构建完成 耗时 {time.time()-start_time}ms")
+        print(f"5. 数据索引构建完成 耗时 {time.time()-start_time:.2f}ms")
         # print(len(stock_data_df))
         # print(stock_data_df.tail())
 
@@ -113,11 +114,27 @@ class StockData:
             stock_sz = stock_sz[["A股代码", "A股简称"]]
             stock_sz.columns = ["代码", "名称"]
             
-            stock_list = pd.concat([stock_sh, stock_sz], ignore_index=True)
-
-            stock_list = stock_list[~stock_list["代码"].str.startswith(("688", "300", "301"))]
-            stock_list = stock_list[~stock_list["名称"].str.contains("ST")]
-            stock_list.rename(columns={"代码": "code", "名称": "name"}, inplace=True)
+            # 使用Polars处理
+            stock_sh_pl = pl.from_pandas(stock_sh)
+            stock_sz_pl = pl.from_pandas(stock_sz)
+            
+            # 合并数据
+            stock_list_pl = pl.concat([stock_sh_pl, stock_sz_pl], rechunk=True)
+            
+            # 筛选条件
+            stock_list_pl = stock_list_pl.filter(
+                ~pl.col("代码").str.starts_with_any(["688", "300", "301"])
+            )
+            stock_list_pl = stock_list_pl.filter(
+                ~pl.col("名称").str.contains("ST")
+            )
+            
+            # 重命名列
+            stock_list_pl = stock_list_pl.rename({"代码": "code", "名称": "name"})
+            
+            # 转换回pandas以保持缓存兼容性
+            stock_list = stock_list_pl.to_pandas()
+            
             cache_file_name="stock_list_"+date.today().strftime("%Y%m%d")
             cache.set(cache_file_name, stock_list)
         return stock_list
@@ -167,7 +184,7 @@ class StockData:
             cache.set_pl(all_cache_file_name,stock_data)
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        # cache.clean(prefix="stock_data_")
+        cache.clean(prefix="stock_data_")
         return stock_data
 
 
@@ -210,7 +227,7 @@ class StockData:
                 consecutive_up[i] = 0
                 count = 0
             else:
-                if close_prices[i] > close_prices[i - 1]:
+                if close_prices[i] >= close_prices[i - 1]:
                     count += 1
                 else:
                     count = 0
@@ -222,5 +239,5 @@ if __name__ == "__main__":
     print("测试按日期获取数据")
     print(sd.get_data_by_date("20250707"))
     print("测试按日期和代码获取数据")
-    print(sd.get_data_by_date_code("20250108","600000"))
+    print(sd.get_data_by_date_code("20250102","000721"))
 

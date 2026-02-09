@@ -10,6 +10,8 @@ from stock_data import StockData as sd
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+# 设置 Matplotlib 后端为非交互式的 'agg'，以支持在多线程环境中使用
+plt.switch_backend('agg')
 from tqdm import tqdm
 from local_cache import LocalCache
 
@@ -33,29 +35,6 @@ class Chain:
         self.calendar = sc()  # 交易日历
         self.result_file = param.get("result_file", None)  # 结果文件
 
-    def _init_cache(self):
-        """Initialize cache and return cached dataframes and executed keys."""
-        cache = LocalCache()  # 本地缓存
-
-        cached_a_df = cache.get_csv(f"a_{self.result_file}")
-        if cached_a_df is None:
-            cached_a_df = pd.DataFrame(columns=RESULT_COLS_A)
-        
-        cached_b_df = cache.get_csv(f"b_{self.result_file}")
-        if cached_b_df is None:
-            cached_b_df = pd.DataFrame(columns=RESULT_COLS_B)
-        
-        executed_keys = set(cached_a_df['配置'].tolist()) if '配置' in cached_a_df.columns else set()
-        b_keys = set(cached_b_df['配置'].tolist()) if '配置' in cached_b_df.columns else set()
-        executed_keys.update(b_keys)
-        
-        print("已缓存执行策略数:", len(executed_keys))
-        
-        temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
-        temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
-        
-        return cache, cached_a_df, cached_b_df, executed_keys, temp_a_df, temp_b_df
-    
     def _draw_fund_trend(self, daily_values, title):
         """绘制资金变化趋势图表并保存到data目录"""
         if not daily_values:
@@ -79,9 +58,9 @@ class Chain:
         file_name = f"fund_trend_{safe_title}.png"
         save_path = data_dir / file_name
         
-        # 提取日期和资金值
+        # 提取日期和资金值（将分转换为元）
         dates = [dv['date'] for dv in daily_values]
-        values = [dv['value'] for dv in daily_values]
+        values = [dv['value'] / 100 for dv in daily_values]
         
         # 调试信息
         if self.chain_debug:
@@ -105,6 +84,9 @@ class Chain:
         ax.grid(True)
         ax.legend()
         
+        # 设置y轴刻度格式为普通数字，不使用科学计数法
+        ax.ticklabel_format(style='plain', axis='y')
+        
         # 调整日期标签
         if len(dates) > 10:
             # 只显示部分日期标签，避免重叠
@@ -122,26 +104,6 @@ class Chain:
             print(f"资金变化图表已保存到: {save_path}")
             print(f"图表保存成功，文件大小: {os.path.getsize(save_path) if os.path.exists(save_path) else 0} bytes")
 
-    def _save_cache(self, cache, cached_a_df, cached_b_df, temp_a_df, temp_b_df):
-        """Save cache data to files."""
-        if cached_a_df.empty:
-            cached_a_df = temp_a_df.copy()
-        else:
-            for col in ['平均交易次数', '平均资金使用率']:
-                if col not in cached_a_df.columns:
-                    cached_a_df[col] = np.nan
-            cached_a_df = pd.concat([cached_a_df, temp_a_df], ignore_index=True)
-
-        # cached_a_df 按平均胜率、平均收益率 排序
-        cached_a_df = cached_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
-        cache.set_csv(f"a_{self.result_file}", cached_a_df)
-        
-        if cached_b_df.empty:
-            cached_b_df = temp_b_df.copy()
-        else:
-            cached_b_df = pd.concat([cached_b_df, temp_b_df], ignore_index=True)
-        cache.set_csv(f"b_{self.result_file}", cached_b_df)
-    
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
         """处理一组策略"""
         # 为每个线程创建独立的缓存
@@ -151,24 +113,32 @@ class Chain:
         # 加载线程本地缓存
         cached_a_df = cache.get_csv(f"a_{thread_result_file}")
         if cached_a_df is None:
-            cached_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+            cached_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+        else:
+            cached_a_df = pl.from_pandas(cached_a_df)
         
         cached_b_df = cache.get_csv(f"b_{thread_result_file}")
         if cached_b_df is None:
-            cached_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+            cached_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
+        else:
+            cached_b_df = pl.from_pandas(cached_b_df)
         
         # 获取已执行的策略键
-        executed_keys = set(cached_a_df['配置'].tolist()) if '配置' in cached_a_df.columns else set()
-        b_keys = set(cached_b_df['配置'].tolist()) if '配置' in cached_b_df.columns else set()
-        executed_keys.update(b_keys)
+        executed_keys = set()
+        if '配置' in cached_a_df.columns:
+            executed_keys.update(cached_a_df['配置'].to_list())
+        if '配置' in cached_b_df.columns:
+            executed_keys.update(cached_b_df['配置'].to_list())
         
-        temp_a_df = pd.DataFrame(columns=RESULT_COLS_A)
-        temp_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+        temp_a_data = []
+        temp_b_data = []
+        processed_count = 0
+        batch_size = 10000
         
         # 处理策略组，添加进度条
         for params in tqdm(strategy_group, desc=f"线程 {thread_id} 执行策略", total=len(strategy_group)):
             cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
-            if cache_key in executed_keys:
+            if cache_key in executed_keys and not self.chain_debug:
                 continue
             
             strategy = UpStrategy(**params)
@@ -204,9 +174,9 @@ class Chain:
                     "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in results]) * 100:.2f}%",
                     "配置": cache_key
                 }
-                temp_a_df.loc[len(temp_a_df)] = new_row
+                temp_a_data.append(new_row)
             else:
-                temp_b_df.loc[len(temp_b_df)] = {"配置": cache_key}
+                temp_b_data.append({"配置": cache_key})
             
             if self.chain_debug:
                 if 'new_row' in locals():
@@ -214,22 +184,91 @@ class Chain:
                 self._draw_fund_trend(all_daily_values, f'线程 {thread_id} - 策略资金变化趋势 - {cache_key}')
             
             executed_keys.add(cache_key)
+            processed_count += 1
+            
+            # 每处理10000个策略保存一次缓存
+            if processed_count % batch_size == 0:
+                # 转换为Polars DataFrame
+                if temp_a_data:
+                    temp_a_df = pl.DataFrame(temp_a_data)
+                else:
+                    temp_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+                
+                if temp_b_data:
+                    temp_b_df = pl.DataFrame(temp_b_data)
+                else:
+                    temp_b_df = pl.DataFrame({col: [] for col in RESULT_COLS_B})
+                
+                # 保存线程本地缓存
+                if not temp_a_df.is_empty():
+                    if cached_a_df.is_empty():
+                        cached_a_df = temp_a_df.clone()
+                    else:
+                        # 确保必要的列存在
+                        for col in ['平均交易次数', '平均资金使用率']:
+                            if col not in cached_a_df.columns:
+                                cached_a_df = cached_a_df.with_columns(pl.lit(None).alias(col))
+                        # 合并数据
+                        cached_a_df = pl.concat([cached_a_df, temp_a_df], rechunk=True)
+                    # 排序
+                    cached_a_df = cached_a_df.sort(
+                        by=['平均胜率', '平均收益率'], 
+                        descending=[True, True]
+                    )
+                    # 转换为pandas DataFrame以保存到缓存
+                    cache.set_csv(f"a_{thread_result_file}", cached_a_df.to_pandas())
+                
+                if not temp_b_df.is_empty():
+                    if cached_b_df.is_empty():
+                        cached_b_df = temp_b_df.clone()
+                    else:
+                        cached_b_df = pl.concat([cached_b_df, temp_b_df], rechunk=True)
+                    # 转换为pandas DataFrame以保存到缓存
+                    cache.set_csv(f"b_{thread_result_file}", cached_b_df.to_pandas())
+                
+                # 清空临时数据，准备下一批
+                temp_a_data = []
+                temp_b_data = []
         
-        # 保存线程本地缓存
-        if not temp_a_df.empty:
-            if cached_a_df.empty:
-                cached_a_df = temp_a_df.copy()
+        # 处理剩余的策略数据
+        if temp_a_data or temp_b_data:
+            # 转换为Polars DataFrame
+            if temp_a_data:
+                temp_a_df = pl.DataFrame(temp_a_data)
             else:
-                cached_a_df = pd.concat([cached_a_df, temp_a_df], ignore_index=True)
-            cached_a_df = cached_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
-            cache.set_csv(f"a_{thread_result_file}", cached_a_df)
-        
-        if not temp_b_df.empty:
-            if cached_b_df.empty:
-                cached_b_df = temp_b_df.copy()
+                temp_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+            
+            if temp_b_data:
+                temp_b_df = pl.DataFrame(temp_b_data)
             else:
-                cached_b_df = pd.concat([cached_b_df, temp_b_df], ignore_index=True)
-            cache.set_csv(f"b_{thread_result_file}", cached_b_df)
+                temp_b_df = pl.DataFrame({col: [] for col in RESULT_COLS_B})
+            
+            # 保存线程本地缓存
+            if not temp_a_df.is_empty():
+                if cached_a_df.is_empty():
+                    cached_a_df = temp_a_df.clone()
+                else:
+                    # 确保必要的列存在
+                    for col in ['平均交易次数', '平均资金使用率']:
+                        if col not in cached_a_df.columns:
+                            cached_a_df = cached_a_df.with_columns(pl.lit(None).alias(col))
+                    # 合并数据
+                    cached_a_df = pl.concat([cached_a_df, temp_a_df], rechunk=True)
+                # 排序
+                cached_a_df = cached_a_df.sort(
+                    by=['平均胜率', '平均收益率'], 
+                    descending=[True, True]
+                )
+                # 转换为pandas DataFrame以保存到缓存
+                cache.set_csv(f"a_{thread_result_file}", cached_a_df.to_pandas())
+            
+            if not temp_b_df.is_empty():
+                if cached_b_df.is_empty():
+                    cached_b_df = temp_b_df.clone()
+                else:
+                    cached_b_df = pl.concat([cached_b_df, temp_b_df], rechunk=True)
+                # 转换为pandas DataFrame以保存到缓存
+                cache.set_csv(f"b_{thread_result_file}", cached_b_df.to_pandas())
 
     def _merge_thread_caches(self) -> None:
         """合并所有线程的缓存文件"""
@@ -238,11 +277,15 @@ class Chain:
         # 加载主缓存
         main_a_df = cache.get_csv(f"a_{self.result_file}")
         if main_a_df is None:
-            main_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+            main_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+        else:
+            main_a_df = pl.from_pandas(main_a_df)
         
         main_b_df = cache.get_csv(f"b_{self.result_file}")
         if main_b_df is None:
-            main_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+            main_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
+        else:
+            main_b_df = pl.from_pandas(main_b_df)
         
         # 合并所有线程的缓存
         for thread_id in range(self.thread_count):
@@ -251,26 +294,33 @@ class Chain:
             # 合并a文件
             thread_a_df = cache.get_csv(f"a_{thread_result_file}")
             if thread_a_df is not None and not thread_a_df.empty:
-                main_a_df = pd.concat([main_a_df, thread_a_df], ignore_index=True)
+                thread_a_df = pl.from_pandas(thread_a_df)
+                main_a_df = pl.concat([main_a_df, thread_a_df], rechunk=True)
                 # 删除已合并的线程缓存文件
                 cache.delete_file(f"a_{thread_result_file}.csv")
             
             # 合并b文件
             thread_b_df = cache.get_csv(f"b_{thread_result_file}")
             if thread_b_df is not None and not thread_b_df.empty:
-                main_b_df = pd.concat([main_b_df, thread_b_df], ignore_index=True)
+                thread_b_df = pl.from_pandas(thread_b_df)
+                main_b_df = pl.concat([main_b_df, thread_b_df], rechunk=True)
                 # 删除已合并的线程缓存文件
                 cache.delete_file(f"b_{thread_result_file}.csv")
         
         # 去重并排序
-        if not main_a_df.empty:
-            main_a_df = main_a_df.drop_duplicates(subset=['配置'])
-            main_a_df = main_a_df.sort_values(by=['平均胜率', '平均收益率'], ascending=[False, False])
-            cache.set_csv(f"a_{self.result_file}", main_a_df)
+        if not main_a_df.is_empty():
+            main_a_df = main_a_df.unique(subset=['配置'])
+            main_a_df = main_a_df.sort(
+                by=['平均胜率', '平均收益率'], 
+                descending=[True, True]
+            )
+            # 转换为pandas DataFrame以保存到缓存
+            cache.set_csv(f"a_{self.result_file}", main_a_df.to_pandas())
         
-        if not main_b_df.empty:
-            main_b_df = main_b_df.drop_duplicates(subset=['配置'])
-            cache.set_csv(f"b_{self.result_file}", main_b_df)
+        if not main_b_df.is_empty():
+            main_b_df = main_b_df.unique(subset=['配置'])
+            # 转换为pandas DataFrame以保存到缓存
+            cache.set_csv(f"b_{self.result_file}", main_b_df.to_pandas())
         
         print(f"合并完成，主文件 a_{self.result_file}.csv 包含 {len(main_a_df)} 条记录")
 
@@ -282,22 +332,28 @@ class Chain:
         cache = LocalCache()
         main_a_df = cache.get_csv(f"a_{self.result_file}")
         if main_a_df is None:
-            main_a_df = pd.DataFrame(columns=RESULT_COLS_A)
+            main_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+        else:
+            main_a_df = pl.from_pandas(main_a_df)
         
         main_b_df = cache.get_csv(f"b_{self.result_file}")
         if main_b_df is None:
-            main_b_df = pd.DataFrame(columns=RESULT_COLS_B)
+            main_b_df = pl.DataFrame({col: [] for col in RESULT_COLS_B})
+        else:
+            main_b_df = pl.from_pandas(main_b_df)
         
         # 获取已执行的策略键
-        executed_keys = set(main_a_df['配置'].tolist()) if '配置' in main_a_df.columns else set()
-        b_keys = set(main_b_df['配置'].tolist()) if '配置' in main_b_df.columns else set()
-        executed_keys.update(b_keys)
+        executed_keys = set()
+        if '配置' in main_a_df.columns:
+            executed_keys.update(main_a_df['配置'].to_list())
+        if '配置' in main_b_df.columns:
+            executed_keys.update(main_b_df['配置'].to_list())
         
-        # 过滤掉已执行的策略
+        # 过滤掉已执行的策略（如果不是调试模式）
         remaining_strategies = []
         for s in self.strategies:
             cache_key = "|".join(",".join(map(str, arr)) for arr in [[s.get('base_param_arr')[1]], s.get('buy_param_arr'), s.get('sell_param_arr')])
-            if cache_key not in executed_keys:
+            if cache_key not in executed_keys or self.chain_debug:
                 remaining_strategies.append(s)
         
         total_strategies = len(remaining_strategies)

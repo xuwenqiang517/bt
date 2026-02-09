@@ -708,10 +708,10 @@ if __name__ == "__main__":
 
     result_file=f"连涨{start_date}-{end_date}-{part}-vol_rank正排"
 
-    bt_all(day_array,result_file)
+    # bt_all(day_array,result_file)
 
     # 100%(6/6),48%,17.70%,23.14%,124.0,49.20%,
-    # bt_one("4|2,5,10,8,15|-11,60,5,25",day_array,result_file)
+    bt_one("4|2,5,10,8,15|-11,60,5,25",day_array,result_file)
 
 
     end_time=datetime.now().timestamp()*1000
