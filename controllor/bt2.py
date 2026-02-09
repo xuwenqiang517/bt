@@ -40,31 +40,19 @@ def bt_all(day_array,result_file):
                                                 "debug": 0
                                             })
     print(f"策略参数数量: {len(strategy_params_list)}")
-    
     # 随机打散
-    random.shuffle(strategy_params_list)
-    random.shuffle(strategy_params_list)
     random.shuffle(strategy_params_list)
 
     # 测试 先用1000个策略
     # strategy_params_list = strategy_params_list[:1]
-    
-
     
     param={
         "strategy":strategy_params_list
         ,"date_arr":day_array
         ,"chain_debug":0
         ,"result_file":result_file
-        ,"thread_count":4
+        ,"thread_count":2
     }
-        # ,"date_arr":[
-        #     ["20240701","20240801"],["20240801","20240901"],["20240901","20241001"],["20241001","20241101"],["20241101","20241201"],["20241201","20250101"]
-        #     ,["20250101","20250201"],["20250201","20250301"],["20250301","20250401"],["20250401","20250501"],["20250501","20250601"],["20250601","20250701"]
-        #     ,["20250701","20250801"],["20250801","20250901"],["20250901","20251001"],["20251001","20251101"],["20251101","20251201"],["20251201","20260101"]
-        #     ,["20260101","20260201"]
-        #              ]
-        # ,"date_arr":[["20250101","20260101"]]
     chain = Chain(param=param)
     chain.execute()
 

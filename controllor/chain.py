@@ -9,6 +9,7 @@ from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
 import pandas as pd
 import numpy as np
+import polars as pl
 import matplotlib.pyplot as plt
 # 设置 Matplotlib 后端为非交互式的 'agg'，以支持在多线程环境中使用
 plt.switch_backend('agg')
@@ -27,7 +28,7 @@ class Chain:
         self.strategies = param["strategy"]  # 策略列表
         self.date_arr = param["date_arr"]  # 回测时间周期列表
         self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
-        self.win_rate_threshold = param.get("win_rate_threshold", 0.65)  # 胜率阈值，默认65%
+        self.win_rate_threshold = param.get("win_rate_threshold", 0.75)  # 胜率阈值，默认65%
         self.thread_count = param.get("thread_count", 1)  # 线程数，默认1
         
         self.param = param  # 原始参数
@@ -106,6 +107,7 @@ class Chain:
 
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
         """处理一组策略"""
+        print(f"进程 {thread_id} 开始处理，策略数: {len(strategy_group)}")
         # 为每个线程创建独立的缓存
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
@@ -113,7 +115,18 @@ class Chain:
         # 加载线程本地缓存
         cached_a_df = cache.get_csv(f"a_{thread_result_file}")
         if cached_a_df is None:
-            cached_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+            # 明确指定列类型，避免类型不兼容问题
+            cached_a_df = pl.DataFrame({
+                '周期胜率': pl.Series([], dtype=pl.String),
+                '平均胜率': pl.Series([], dtype=pl.String),
+                '平均收益率': pl.Series([], dtype=pl.String),
+                '平均交易次数': pl.Series([], dtype=pl.Float64),
+                '最大资金': pl.Series([], dtype=pl.Float64),
+                '最小资金': pl.Series([], dtype=pl.Float64),
+                '夏普比率': pl.Series([], dtype=pl.Float64),
+                '平均资金使用率': pl.Series([], dtype=pl.String),
+                '配置': pl.Series([], dtype=pl.String)
+            })
         else:
             cached_a_df = pl.from_pandas(cached_a_df)
         
@@ -133,10 +146,10 @@ class Chain:
         temp_a_data = []
         temp_b_data = []
         processed_count = 0
-        batch_size = 10000
+        batch_size = 1000
         
         # 处理策略组，添加进度条
-        for params in tqdm(strategy_group, desc=f"线程 {thread_id} 执行策略", total=len(strategy_group)):
+        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group)):
             cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
             if cache_key in executed_keys and not self.chain_debug:
                 continue
@@ -180,8 +193,8 @@ class Chain:
             
             if self.chain_debug:
                 if 'new_row' in locals():
-                    print(f"线程 {thread_id}: {new_row}")
-                self._draw_fund_trend(all_daily_values, f'线程 {thread_id} - 策略资金变化趋势 - {cache_key}')
+                    print(f"进程 {thread_id}: {new_row}")
+                self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
             
             executed_keys.add(cache_key)
             processed_count += 1
@@ -192,12 +205,23 @@ class Chain:
                 if temp_a_data:
                     temp_a_df = pl.DataFrame(temp_a_data)
                 else:
-                    temp_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+                    # 明确指定列类型，避免类型不兼容问题
+                    temp_a_df = pl.DataFrame({
+                        '周期胜率': pl.Series([], dtype=pl.String),
+                        '平均胜率': pl.Series([], dtype=pl.String),
+                        '平均收益率': pl.Series([], dtype=pl.String),
+                        '平均交易次数': pl.Series([], dtype=pl.Float64),
+                        '最大资金': pl.Series([], dtype=pl.Float64),
+                        '最小资金': pl.Series([], dtype=pl.Float64),
+                        '夏普比率': pl.Series([], dtype=pl.Float64),
+                        '平均资金使用率': pl.Series([], dtype=pl.String),
+                        '配置': pl.Series([], dtype=pl.String)
+                    })
                 
                 if temp_b_data:
                     temp_b_df = pl.DataFrame(temp_b_data)
                 else:
-                    temp_b_df = pl.DataFrame({col: [] for col in RESULT_COLS_B})
+                    temp_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
                 
                 # 保存线程本地缓存
                 if not temp_a_df.is_empty():
@@ -236,12 +260,23 @@ class Chain:
             if temp_a_data:
                 temp_a_df = pl.DataFrame(temp_a_data)
             else:
-                temp_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+                # 明确指定列类型，避免类型不兼容问题
+                temp_a_df = pl.DataFrame({
+                    '周期胜率': pl.Series([], dtype=pl.String),
+                    '平均胜率': pl.Series([], dtype=pl.String),
+                    '平均收益率': pl.Series([], dtype=pl.String),
+                    '平均交易次数': pl.Series([], dtype=pl.Float64),
+                    '最大资金': pl.Series([], dtype=pl.Float64),
+                    '最小资金': pl.Series([], dtype=pl.Float64),
+                    '夏普比率': pl.Series([], dtype=pl.Float64),
+                    '平均资金使用率': pl.Series([], dtype=pl.String),
+                    '配置': pl.Series([], dtype=pl.String)
+                })
             
             if temp_b_data:
                 temp_b_df = pl.DataFrame(temp_b_data)
             else:
-                temp_b_df = pl.DataFrame({col: [] for col in RESULT_COLS_B})
+                temp_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
             
             # 保存线程本地缓存
             if not temp_a_df.is_empty():
@@ -277,7 +312,18 @@ class Chain:
         # 加载主缓存
         main_a_df = cache.get_csv(f"a_{self.result_file}")
         if main_a_df is None:
-            main_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+            # 明确指定列类型，避免类型不兼容问题
+            main_a_df = pl.DataFrame({
+                '周期胜率': pl.Series([], dtype=pl.String),
+                '平均胜率': pl.Series([], dtype=pl.String),
+                '平均收益率': pl.Series([], dtype=pl.String),
+                '平均交易次数': pl.Series([], dtype=pl.Float64),
+                '最大资金': pl.Series([], dtype=pl.Float64),
+                '最小资金': pl.Series([], dtype=pl.Float64),
+                '夏普比率': pl.Series([], dtype=pl.Float64),
+                '平均资金使用率': pl.Series([], dtype=pl.String),
+                '配置': pl.Series([], dtype=pl.String)
+            })
         else:
             main_a_df = pl.from_pandas(main_a_df)
         
@@ -332,13 +378,24 @@ class Chain:
         cache = LocalCache()
         main_a_df = cache.get_csv(f"a_{self.result_file}")
         if main_a_df is None:
-            main_a_df = pl.DataFrame({col: [] for col in RESULT_COLS_A})
+            # 明确指定列类型，避免类型不兼容问题
+            main_a_df = pl.DataFrame({
+                '周期胜率': pl.Series([], dtype=pl.String),
+                '平均胜率': pl.Series([], dtype=pl.String),
+                '平均收益率': pl.Series([], dtype=pl.String),
+                '平均交易次数': pl.Series([], dtype=pl.Float64),
+                '最大资金': pl.Series([], dtype=pl.Float64),
+                '最小资金': pl.Series([], dtype=pl.Float64),
+                '夏普比率': pl.Series([], dtype=pl.Float64),
+                '平均资金使用率': pl.Series([], dtype=pl.String),
+                '配置': pl.Series([], dtype=pl.String)
+            })
         else:
             main_a_df = pl.from_pandas(main_a_df)
         
         main_b_df = cache.get_csv(f"b_{self.result_file}")
         if main_b_df is None:
-            main_b_df = pl.DataFrame({col: [] for col in RESULT_COLS_B})
+            main_b_df = pl.DataFrame({col: pl.Series([], dtype=pl.String) for col in RESULT_COLS_B})
         else:
             main_b_df = pl.from_pandas(main_b_df)
         
@@ -358,7 +415,7 @@ class Chain:
         
         total_strategies = len(remaining_strategies)
         print(f"总策略数: {len(self.strategies)}, 已执行: {len(self.strategies) - total_strategies}, 剩余: {total_strategies}")
-        print(f"使用线程数: {self.thread_count}")
+        print(f"使用进程数: {self.thread_count}")
         
         if total_strategies == 0:
             print("所有策略已执行完毕，无需处理")
@@ -371,19 +428,23 @@ class Chain:
             start_idx = i * group_size
             end_idx = (i + 1) * group_size if i < self.thread_count - 1 else total_strategies
             strategy_groups.append(remaining_strategies[start_idx:end_idx])
-            print(f"线程 {i} 处理策略数: {len(remaining_strategies[start_idx:end_idx])}")
+            print(f"进程 {i} 处理策略数: {len(remaining_strategies[start_idx:end_idx])}")
         
         # 并行处理
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.thread_count) as executor:
+        print(f"创建进程池，最大进程数: {self.thread_count}")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.thread_count) as executor:
+            print("提交任务到进程池...")
             future_to_group = {executor.submit(self._process_strategy_group, group, i): i for i, group in enumerate(strategy_groups)}
+            print(f"已提交 {len(future_to_group)} 个任务到进程池")
             
+            print("等待进程完成...")
             for future in concurrent.futures.as_completed(future_to_group):
                 thread_id = future_to_group[future]
                 try:
                     future.result()
-                    print(f"线程 {thread_id} 处理完成")
+                    print(f"进程 {thread_id} 处理完成")
                 except Exception as exc:
-                    print(f"线程 {thread_id} 处理失败: {exc}")
+                    print(f"进程 {thread_id} 处理失败: {exc}")
         
         # 所有策略执行完成后，合并所有线程的缓存
         self._merge_thread_caches()
