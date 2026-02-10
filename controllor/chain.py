@@ -51,13 +51,13 @@ class Chain:
         values = [dv['value'] / 100 for dv in daily_values]
         
         # 调试信息
-        if self.chain_debug:
-            print(f"绘图数据: 日期数量={len(dates)}, 资金数量={len(values)}")
-            if dates:
-                print(f"起始日期: {dates[0]}, 结束日期: {dates[-1]}")
-            if values:
-                print(f"起始资金: {values[0]:.2f}, 结束资金: {values[-1]:.2f}")
-                print(f"最大资金: {max(values):.2f}, 最小资金: {min(values):.2f}")
+        # if self.chain_debug:
+        #     print(f"绘图数据: 日期数量={len(dates)}, 资金数量={len(values)}")
+        #     if dates:
+        #         print(f"起始日期: {dates[0]}, 结束日期: {dates[-1]}")
+        #     if values:
+        #         print(f"起始资金: {values[0]:.2f}, 结束资金: {values[-1]:.2f}")
+        #         print(f"最大资金: {max(values):.2f}, 最小资金: {min(values):.2f}")
         
         # 设置中文字体
         plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'WenQuanYi Micro Hei']  # 用来正常显示中文标签
@@ -145,7 +145,7 @@ class Chain:
             if is_debug:
                 if 'new_row' in locals():
                     print(f"进程 {thread_id}: {new_row}")
-                self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
+                # self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
             
             # 直接将new_row转换为DataFrame并处理
             new_data_df = pl.DataFrame([new_row])
@@ -249,7 +249,7 @@ class Chain:
                 cache.delete_file(f"{thread_cache_filename}.csv")
         
         # 去重并排序
-        if not main_a_df.is_empty():
+        if not main_a_df.is_empty() and not self.chain_debug:
             main_a_df = main_a_df.unique(subset=['配置'])
             main_a_df = main_a_df.sort(
                 by=['平均胜率', '平均收益率'], 
@@ -258,7 +258,7 @@ class Chain:
             # 保存到缓存
             self._save_cache(cache, main_cache_filename, main_a_df)
         
-        print(f"合并完成，主文件 a_{main_cache_filename}.csv 包含 {len(main_a_df)} 条记录")
+        # print(f"合并完成，主文件 a_{main_cache_filename}.csv 包含 {len(main_a_df)} 条记录")
 
     def execute(self) -> list:
         # 先合并所有进程的缓存，确保中断后再运行时能正确加载之前的结果
@@ -310,7 +310,6 @@ class Chain:
                 print(f"启动进程: {process_name}，处理策略数: {len(group)}")
         
         # 等待所有进程完成
-        print("等待进程完成...")
         for i, process in enumerate(processes):
             process.join()
             print(f"进程 {i} ({process.name}) 处理完成")
@@ -318,7 +317,6 @@ class Chain:
         # 所有策略执行完成后，合并所有进程的缓存
         self._merge_thread_caches()
         
-        print("所有策略执行完成")
         return
 
 

@@ -5,17 +5,10 @@ import numpy as np
 import polars as pl
 from tqdm import tqdm
 import requests
-from typing import NamedTuple
-
-StockDataTuple = NamedTuple("StockDataTuple", [
-    ("code", str),
-    ("open", int),
-    ("high", int),
-    ("low", int),
-    ("close", int),
-    ("change_pct", float)
-])
-
+# pl 显示所有表头
+pl.Config.set_tbl_cols(100)
+# pl 显示所有列
+pl.Config.set_tbl_rows(10)
 
 class StockData:
     def __init__(self):
@@ -24,33 +17,14 @@ class StockData:
         if datetime.now().hour < 15:
             today=(date.today()-timedelta(days=1)).strftime("%Y%m%d")
         cache=lc()
+        self.use_all_cache=True
+
         print(f"1. 获取股票列表")
         stock_list_df=self.get_stock_list(today,cache)
         print(f"2. 获取股票数据")
         stock_data_df=self.get_stock_data_pl(stock_list_df,today,cache)
-        # 一层dict，日期+pl
         print(f"3. 构建数据索引")
         self.date_df_dict=self.convert(stock_data_df)
-        # print(len(stock_data_df))
-        # print(stock_data_df.tail())
-
-    def get_data_by_date(self,today)->pl.DataFrame:
-        if today in self.date_df_dict:
-            df = self.date_df_dict[today]
-            # 继续以整数形式返回数据
-            return df
-        else:
-            print(f"没有找到日期 {today} 的股票数据")
-            return pl.DataFrame()
-    def get_data_by_date_code(self,today,code)->pl.DataFrame:
-        if today in self.date_df_dict:
-            df = self.date_df_dict[today]
-            filtered_df = df.filter(pl.col("code") == code)
-            return filtered_df
-        else:
-            # print(f"没有找到日期 {today} 的股票数据")
-            return pl.DataFrame()
-
 
     def convert(self,stock_data_df)->dict[str,pl.DataFrame]:
         # 按日期构建索引，key为日期，值为该日期的所有股票数据df，性能要最好
@@ -60,11 +34,31 @@ class StockData:
             # 确保trade_date是字符串而不是元组
             if isinstance(trade_date, tuple):
                 trade_date = trade_date[0]
-                # 按vol_rank正排，vol_rank相同按change_pct倒排
-                group=group.sort("vol_rank" ,descending=False)
+            if group is None or group.is_empty():
+                continue
+            # 按vol_rank正排，vol_rank相同按change_pct倒排
+            group=group.sort("change_pct" ,descending=False)
             date_dict[trade_date] = group
-        
         return date_dict
+    
+    def get_data_by_date(self,today)->pl.DataFrame:
+        if today in self.date_df_dict:
+            df = self.date_df_dict[today]
+            # 继续以整数形式返回数据
+            return df
+        else:
+            # print(f"没有找到日期 {today} 的股票数据")
+            return None
+    def get_data_by_date_code(self,today,code)->pl.DataFrame:
+        if today in self.date_df_dict:
+            df = self.date_df_dict[today]
+            filtered_df = df.filter(pl.col("code") == code)
+            return filtered_df
+        else:
+            # print(f"没有找到日期 {today} 的股票数据")
+            return None
+
+
     
 
     
@@ -92,7 +86,9 @@ class StockData:
             
             # 筛选条件
             stock_list_pl = stock_list_pl.filter(
-                ~pl.col("代码").str.starts_with_any(["688", "300", "301"])
+                ~(pl.col("代码").str.starts_with("688") | 
+                  pl.col("代码").str.starts_with("300") | 
+                  pl.col("代码").str.starts_with("301"))
             )
             stock_list_pl = stock_list_pl.filter(
                 ~pl.col("名称").str.contains("ST")
@@ -112,7 +108,9 @@ class StockData:
     def get_stock_data_pl(self,stock_list,today,cache):
         all_cache_file_name="all_stock_data_"+today+"_pl"
         cache.clean(prefix="all_stock_data_",ignore=[all_cache_file_name])
-        stock_data = cache.get_pl(all_cache_file_name)
+        stock_data = None
+        if self.use_all_cache:
+            stock_data = cache.get_pl(all_cache_file_name)
 
         if stock_data is None:
             print(f"缓存取股票数据 {all_cache_file_name} 失败，尝试从_tx获取")
@@ -153,7 +151,7 @@ class StockData:
             cache.set_pl(all_cache_file_name,stock_data)
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        cache.clean(prefix="stock_data_")
+        # cache.clean(prefix="stock_data_")
         return stock_data
 
 
@@ -174,7 +172,11 @@ class StockData:
                 # 涨跌幅是float32，直接计算
                 pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d"),
                 pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d"),
-                pl.col("change_pct").rolling_sum(window_size=10).round(2).cast(pl.Float32).alias("change_10d")
+                pl.col("change_pct").rolling_sum(window_size=10).round(2).cast(pl.Float32).alias("change_10d"),
+                # 计算成交量的MA5和MA10
+                pl.col("volume").rolling_mean(window_size=5).alias("ma5_vol"),
+                pl.col("volume").rolling_mean(window_size=10).alias("ma10_vol"),
+                pl.col("volume").rolling_mean(window_size=20).alias("ma20_vol")
             ]).with_columns([
                 pl.Series(
                     name="consecutive_up_days",
@@ -182,7 +184,9 @@ class StockData:
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
                 )
             ]).with_columns([
-                pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("vol_rank")  # 使用int16存储排名
+                pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("vol_rank"),  # 使用int16存储排名
+                # 计算ma_up：MA5 > MA10 && MA5 > MA20 为1，否则为0
+                ((pl.col("ma5_vol") > pl.col("ma10_vol") ) & (pl.col("ma5_vol") > pl.col("ma20_vol"))).cast(pl.Int8).alias("ma_up")
             ]).collect()
         
         return df_tech

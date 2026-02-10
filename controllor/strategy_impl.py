@@ -11,17 +11,17 @@ class UpStrategy(Strategy):
     def _init_pick_filter(self):
         buy_up_day_min = self.buy_param_arr[0]
         buy_day3_min = self.buy_param_arr[1]
-        buy_day3_max = self.buy_param_arr[2]
-        buy_day5_min = self.buy_param_arr[3]
-        buy_day5_max = self.buy_param_arr[4]
+        buy_day5_min = self.buy_param_arr[2]
         
         def filter_func(df: pl.DataFrame) -> pl.Series:
             return (
-                (df["consecutive_up_days"] >= buy_up_day_min)
+                # 新增条件：ma_up为1
+                (df["ma_up"] == 1)
+                & (df["consecutive_up_days"] >= buy_up_day_min)
                 & (df["change_3d"] >= buy_day3_min)
-                & (df["change_3d"] <= buy_day3_max)
                 & (df["change_5d"] >= buy_day5_min)
-                & (df["change_5d"] <= buy_day5_max)
+                # 收盘价低于5日均线
+                # & (df["close"] <= 5)
             )
         self._pick_filter = filter_func
     
@@ -37,23 +37,16 @@ class UpStrategy(Strategy):
     #     self._pick_sorter = sorter_func
     
     def init_sell_strategy_chain(self):
-        sell1, sell2 = self.sell_param_arr
+        sell1, sell2, sell3, sell4, sell5 = self.sell_param_arr
         strategies = []
         # if sell1 is not None:
         strategies.append(SellStrategy("静态止损", sell1/100.0))
-        # if sell2 is not None:
-        #     strategies.append(SellStrategy("移动止盈", sell2/100.0))
-        # if sell3 is not None and sell4 is not None:
-        #     # 贪婪止盈：需要days, min_return, trailing_stop_rate三个参数
-        #     # 假设sell3是days，sell4是min_return，sell5是trailing_stop_rate
-        #     trailing_stop_rate = 0.05  # 默认移动止盈回撤率5%
-        #     if len(self.sell_param_arr) >= 6 and self.sell_param_arr[5] is not None:
-        #         trailing_stop_rate = self.sell_param_arr[5]/100.0
-        #     strategies.append(SellStrategy("贪婪止盈", (sell3, sell4/100.0, trailing_stop_rate)))
+        # 贪婪止盈：需要days, min_return, trailing_stop_rate三个参数
+        strategies.append(SellStrategy("贪婪止盈", (sell2, sell3/100.0, sell4/100.0, sell5/100.0)))
         # 假设sell_param_arr的第五个参数用于时间止盈
         # if len(self.sell_param_arr) >= 5 and self.sell_param_arr[4] is not None:
         #     time_days = 
-        strategies.append(SellStrategy("时间止盈", sell2))
+        # strategies.append(SellStrategy("时间止盈", sell2))
         return strategies
     
         
