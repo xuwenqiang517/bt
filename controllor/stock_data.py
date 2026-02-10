@@ -1,7 +1,6 @@
 from datetime import date,datetime
 import akshare as ak
 from local_cache import LocalCache as lc
-import pandas as pd
 import numpy as np
 import polars as pl
 from tqdm import tqdm

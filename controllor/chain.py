@@ -1,4 +1,3 @@
-import concurrent.futures
 from typing import List,  Dict, Any
 
 from stock_calendar import StockCalendar as sc
@@ -124,8 +123,8 @@ class Chain:
         processed_count = 0
         batch_size = 1000
         
-        # 处理策略组，添加进度条
-        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group)):
+        # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰
+        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True):
             cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
             if cache_key in executed_keys and not self.chain_debug:
                 continue

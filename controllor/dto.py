@@ -1,18 +1,4 @@
-import random
-
-import sys
-from stock_calendar import StockCalendar as sc
-from stock_data import StockData as sd
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
-from typing import NamedTuple, Callable
-from datetime import date, datetime
-from local_cache import LocalCache
-
-# 回测结果CSV列名
-RESULT_COLS_A = ['周期胜率', '平均胜率', '平均收益率', '平均最大回撤', '平均交易次数', '平均资金使用率', '配置']
-RESULT_COLS_B = ['配置']
+from typing import NamedTuple
 
 
 class HoldStock:

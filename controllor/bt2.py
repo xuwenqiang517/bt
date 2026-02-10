@@ -1,18 +1,7 @@
 import random
 
-import sys
 from stock_calendar import StockCalendar as sc
-from stock_data import StockData as sd
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
-from typing import NamedTuple, Callable
-from datetime import date, datetime
-from local_cache import LocalCache
 
-
-from dto import *
-from strategy import Strategy
 from chain import Chain
 
         
@@ -51,7 +40,7 @@ def bt_all(day_array,result_file):
         ,"date_arr":day_array
         ,"chain_debug":0
         ,"result_file":result_file
-        ,"thread_count":2
+        ,"thread_count":1
     }
     chain = Chain(param=param)
     chain.execute()
@@ -80,18 +69,11 @@ def bt_one(strategy_params,day_array,result_file):
 
 
 if __name__ == "__main__":
-    start_time=datetime.now().timestamp()*1000
     
-    # day_array=sc().get_date_arr()
-    day_array=[["20250101","20250201"]]
+    day_array=sc().get_date_arr()
+    # day_array=[["20250101","20250201"]]
 
     result_file=f"连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-vol_rank正排"
 
-    # bt_all(day_array,result_file)
-
-    # 100%(6/6),48%,17.70%,23.14%,124.0,49.20%,
-    bt_one("4|3,3,10,8,25|-5,35,3,5",day_array,result_file)
-
-
-    end_time=datetime.now().timestamp()*1000
-    print(f"回测完成 耗时{(end_time-start_time):.2f}ms")
+    bt_all(day_array,result_file)
+    # bt_one("4|3,3,10,8,25|-5,35,3,5",day_array,result_file)

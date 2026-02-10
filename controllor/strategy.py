@@ -1,7 +1,6 @@
 import sys
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
-import matplotlib.pyplot as plt
 import polars as pl
 
 from dto import *
