@@ -15,8 +15,9 @@ class Strategy:
     STRATEGY_MAP = {
         "静态止损": "stop_loss",
         "静态止盈": "stop_profit",
-        "累计涨幅卖出": "cumulative_return_sell",
-        "移动止盈": "trailing_stop_profit"
+        "贪婪止盈": "greedy_stop_profit",
+        "移动止盈": "trailing_stop_profit",
+        "时间止盈": "time_based_sell"
     }
     
     def __init__(self, base_param_arr: list, sell_param_arr: list, buy_param_arr: list, debug: bool):
@@ -278,76 +279,91 @@ class Strategy:
                     print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {free_amount:.2f}")
                 
 
-    def stop_loss(self, hold: HoldStock, stock_data: pl.DataFrame, params: StopLossParams) -> tuple[bool, int, str]:
+    def stop_loss(self, hold: HoldStock, stock_data: pl.DataFrame, params: float) -> tuple[bool, int, str]:
         """
         触发固定阈值的止损卖出
         """
         #计算止损价
-        stop_loss_price = int(hold.buy_price * (1 + params.rate))
+        stop_loss_price = int(hold.buy_price * (1 + params))
         # 缓存常用值
         open_price = stock_data['open'][0]
         low_price = stock_data['low'][0]
         is_debug=self.debug
         if open_price <= stop_loss_price:
             if is_debug:
-                return True, open_price, f"开盘价{open_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以开盘价{open_price/100:.2f}卖出"
+                return True, open_price, f"开盘价{open_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params):.2%}),以开盘价{open_price/100:.2f}卖出"
             return True, open_price, EMPTY_STRING
         elif low_price <= stop_loss_price:
             if is_debug:
-                return True, stop_loss_price, f"盘中最低价{low_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以止损价{stop_loss_price/100:.2f}卖出"
+                return True, stop_loss_price, f"盘中最低价{low_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params):.2%}),以止损价{stop_loss_price/100:.2f}卖出"
             return True, stop_loss_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
     
-    def stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame, params: StopProfitParams) -> tuple[bool, int, str]:
+    def stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame, params: float) -> tuple[bool, int, str]:
         """
         触发固定阈值的止盈卖出
         """
         #计算止盈价
-        stop_profit_price = int(hold.buy_price * (1 + params.rate))
+        stop_profit_price = int(hold.buy_price * (1 + params))
         # 缓存常用值
         open_price = stock_data['open'][0]
         high_price = stock_data['high'][0]
         is_debug=self.debug
         if open_price >= stop_profit_price:
             if is_debug:
-                return True, open_price, f"开盘价{open_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以开盘价{open_price/100:.2f}卖出"
+                return True, open_price, f"开盘价{open_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params:.2%}),以开盘价{open_price/100:.2f}卖出"
             return True, open_price, EMPTY_STRING
         elif high_price >= stop_profit_price:
             if is_debug:
-                return True, stop_profit_price, f"盘中最高价{high_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以止盈价{stop_profit_price/100:.2f}卖出"
+                return True, stop_profit_price, f"盘中最高价{high_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params:.2%}),以止盈价{stop_profit_price/100:.2f}卖出"
             return True, stop_profit_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
 
-    def cumulative_return_sell(self, hold: HoldStock, stock_data: pl.DataFrame, params: CumulativeSellParams) -> tuple[bool, int, str]:
+    def greedy_stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame, params: tuple) -> tuple[bool, int, str]:
         """
-        x天累计涨幅没到y，以持仓最后一天的开盘价卖掉
-        params: CumulativeSellParams(days=x, min_return=y)
+        贪婪止盈策略
+        params: (days, min_return, trailing_stop_rate)
+        days: 持有天数阈值
+        min_return: 目标涨幅
+        trailing_stop_rate: 移动止盈回撤率
         """
-        # 直接使用StockCalendar的gap函数计算持仓天数
+        days, min_return, trailing_stop_rate = params
+        # 计算持仓天数
         hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        # 如果持仓天数小于x天，不触发卖出
-        if hold_days < params.days:
-            return False, 0, EMPTY_STRING
         # 缓存常用值
         close_price = stock_data['close'][0]
         open_price = stock_data['open'][0]
         is_debug=self.debug
-        # 计算累计涨幅
-        cumulative_return = (close_price - hold.buy_price) / hold.buy_price
-        # 如果累计涨幅没达到最小要求，以开盘价卖出
-        if cumulative_return < params.min_return:
-            if is_debug:
-                return True, open_price, f"持仓{params.days}天 累计涨幅{cumulative_return:.2%}<{params.min_return:.2%}，以开盘价{open_price/100:.2f}卖出"
-            return True, open_price, EMPTY_STRING
+        # 计算整体涨幅
+        overall_return = (close_price - hold.buy_price) / hold.buy_price
+        
+        if hold_days <= days:
+            # 补丁1：如果X天内已经盈利（哪怕没到目标），可以不卖，避免"卖飞小赚标的"
+            if overall_return < min_return and overall_return <= 0:
+                # 只卖"没达标且没赚钱"的，小赚的留着
+                if is_debug:
+                    return True, open_price, f"持仓{hold_days}天 涨幅{overall_return:.2%}<目标涨幅{min_return:.2%}且未盈利，以开盘价{open_price/100:.2f}卖出"
+                return True, open_price, EMPTY_STRING
+        else:
+            # 补丁2：移动止盈前先锁定"最低盈利"，比如至少赚2%才触发移动止盈
+            min_profit_threshold = 0.02  # 最低盈利阈值2%
+            # 计算当前价与最高价的回撤
+            drawdown = (close_price - hold.highest_price) / hold.highest_price if hold.highest_price > 0 else 0
+            
+            if overall_return >= min_profit_threshold and drawdown <= -trailing_stop_rate:
+                # 卖出（移动止盈：赚够基础利润后，再用回撤保护）
+                if is_debug:
+                    return True, open_price, f"整体涨幅{overall_return:.2%}>=最低盈利阈值{min_profit_threshold:.2%}且回撤{drawdown:.2%}<=-{trailing_stop_rate:.2%}，以开盘价{open_price/100:.2f}卖出"
+                return True, open_price, EMPTY_STRING
         
         return False, 0, EMPTY_STRING
 
-    def trailing_stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame | dict, params: TrailingStopProfitParams) -> tuple[bool, int, str]:
+    def trailing_stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame | dict, params: float) -> tuple[bool, int, str]:
         """
         移动止盈策略：从最高持仓价格回撤指定百分比后卖出
         """
         # 计算止盈价（最高价格 * (1 - 回撤率)）
-        trailing_stop_price = int(hold.highest_price * (1 - params.rate))
+        trailing_stop_price = int(hold.highest_price * (1 - params))
         
         # 缓存常用值
         open_price = stock_data['open'][0]
@@ -355,13 +371,30 @@ class Strategy:
         is_debug=self.debug
         if open_price <= trailing_stop_price:
             if is_debug:
-                return True, open_price, f"开盘价{open_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params.rate:.2%}),以开盘价{open_price/100:.2f}卖出"
+                return True, open_price, f"开盘价{open_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params:.2%}),以开盘价{open_price/100:.2f}卖出"
             return True, open_price, EMPTY_STRING
         elif low_price <= trailing_stop_price:
             if is_debug:
-                return True, trailing_stop_price, f"盘中最低价{low_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params.rate:.2%}),以移动止盈价{trailing_stop_price/100:.2f}卖出"
+                return True, trailing_stop_price, f"盘中最低价{low_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params:.2%}),以移动止盈价{trailing_stop_price/100:.2f}卖出"
             return True, trailing_stop_price, EMPTY_STRING
         
+        return False, 0, EMPTY_STRING
+
+    def time_based_sell(self, hold: HoldStock, stock_data: pl.DataFrame, params: int) -> tuple[bool, int, str]:
+        """
+        时间止盈策略：持有指定天数后卖出
+        params: 持有天数
+        """
+        # 计算持仓天数
+        hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
+        # 缓存常用值
+        open_price = stock_data['open'][0]
+        is_debug=self.debug
+        # 如果持仓天数达到指定天数，以开盘价卖出
+        if hold_days >= params:
+            if is_debug:
+                return True, open_price, f"持仓{hold_days}天达到时间止盈阈值{params}天，以开盘价{open_price/100:.2f}卖出"
+            return True, open_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
 
     def settle_amount(self) -> None:

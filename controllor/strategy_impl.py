@@ -37,14 +37,23 @@ class UpStrategy(Strategy):
     #     self._pick_sorter = sorter_func
     
     def init_sell_strategy_chain(self):
-        sl, sp, cd, cr = self.sell_param_arr
+        sell1, sell2 = self.sell_param_arr
         strategies = []
-        if sl is not None:
-            strategies.append(SellStrategy("静态止损", StopLossParams(rate=sl/100.0)))
-        if sp is not None:
-            strategies.append(SellStrategy("静态止盈", StopProfitParams(rate=sp/100.0)))
-        if cd is not None and cr is not None:
-            strategies.append(SellStrategy("累计涨幅卖出", CumulativeSellParams(days=cd, min_return=cr/100.0)))
+        # if sell1 is not None:
+        strategies.append(SellStrategy("静态止损", sell1/100.0))
+        # if sell2 is not None:
+        #     strategies.append(SellStrategy("移动止盈", sell2/100.0))
+        # if sell3 is not None and sell4 is not None:
+        #     # 贪婪止盈：需要days, min_return, trailing_stop_rate三个参数
+        #     # 假设sell3是days，sell4是min_return，sell5是trailing_stop_rate
+        #     trailing_stop_rate = 0.05  # 默认移动止盈回撤率5%
+        #     if len(self.sell_param_arr) >= 6 and self.sell_param_arr[5] is not None:
+        #         trailing_stop_rate = self.sell_param_arr[5]/100.0
+        #     strategies.append(SellStrategy("贪婪止盈", (sell3, sell4/100.0, trailing_stop_rate)))
+        # 假设sell_param_arr的第五个参数用于时间止盈
+        # if len(self.sell_param_arr) >= 5 and self.sell_param_arr[4] is not None:
+        #     time_days = 
+        strategies.append(SellStrategy("时间止盈", sell2))
         return strategies
     
         

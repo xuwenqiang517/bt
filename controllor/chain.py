@@ -17,8 +17,8 @@ class Chain:
         self.strategies = param["strategy"]  # 策略列表
         self.date_arr = param["date_arr"]  # 回测时间周期列表
         self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
-        self.win_rate_threshold = param.get("win_rate_threshold", 0.9)  # 胜率阈值，默认65%
-        self.thread_count = param.get("thread_count", 1)  # 线程数，默认1
+        self.win_rate_threshold = param.get("win_rate_threshold", 0.99)  # 胜率阈值，默认65%
+        self.processor_count = param.get("processor_count", 1)  # 进程数，默认1
         
         self.param = param  # 原始参数
         self.result_file = param.get("result_file", None)  # 结果文件
@@ -100,126 +100,62 @@ class Chain:
         process_name = f"ChainProcess-{thread_id}"
         current_process.name = process_name
         print(f"进程 {thread_id} ({process_name}) 开始处理，策略数: {len(strategy_group)}")
-        # 为每个线程创建独立的缓存
+        # 为每个进程创建独立的缓存
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
         
         # 在子进程中初始化 stock_data 和 calendar
         stock_data = sd()
         calendar = sc()
+        is_debug=self.chain_debug
         
-        # 加载线程本地缓存
-        cached_a_df = cache.get_csv_pl(f"a_{thread_result_file}")
-        if cached_a_df is None:
-            # 明确指定列类型，避免类型不兼容问题
-            cached_a_df = self._create_empty_a_df()
+        # 加载进程本地缓存
+        cache_filename = f"a_{thread_result_file}"
+        cached_a_df = self._load_cache(cache, cache_filename)
         
-        # 获取已执行的策略键
-        executed_keys = set()
-        if '配置' in cached_a_df.columns:
-            executed_keys.update(cached_a_df['配置'].to_list())
-        
-        temp_a_data = []
-        processed_count = 0
-        batch_size = 1000
+        # 计算固定值，避免在循环中重复计算
+        total_count = len(self.date_arr)
         
         # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰
         for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True):
-            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
-            if cache_key in executed_keys and not self.chain_debug:
-                continue
-            
             strategy = UpStrategy(**params)
             results = []
-            total_periods = len(self.date_arr)
-            max_failures_allowed = int(total_periods * (1 - self.win_rate_threshold))
             failure_count = 0
-            successful_count = 0
             all_daily_values = []
             
             for s, e in self.date_arr:
                 result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
-                if result.总收益率 > 0:
-                    successful_count += 1
-                else:
+                if result.总收益率 <= 0:
                     failure_count += 1
-                    if failure_count > max_failures_allowed and not self.chain_debug:
+                    if not is_debug:
                         break
                 results.append(result)
+
+            if failure_count>0 and not is_debug:
+                continue
+
+            successful_count=total_count-failure_count
+            actual_win_rate = successful_count / total_count if results else 0
+
+            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
+            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key)
             
-            actual_win_rate = successful_count / len(results) if results else 0
-            if actual_win_rate >= self.win_rate_threshold and len(results) == total_periods:
-                new_row = self._create_new_row(actual_win_rate, successful_count, total_periods, results, cache_key)
-                temp_a_data.append(new_row)
-            
-            if self.chain_debug:
+            if is_debug:
                 if 'new_row' in locals():
                     print(f"进程 {thread_id}: {new_row}")
                 self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
             
-            executed_keys.add(cache_key)
-            processed_count += 1
-            
-            # 每处理10000个策略保存一次缓存
-            if processed_count % batch_size == 0:
-                # 转换为Polars DataFrame
-                if temp_a_data:
-                    temp_a_df = pl.DataFrame(temp_a_data)
-                else:
-                    # 明确指定列类型，避免类型不兼容问题
-                    temp_a_df = self._create_empty_a_df()
-                
-                # 保存线程本地缓存
-                if not temp_a_df.is_empty():
-                    if cached_a_df.is_empty():
-                        cached_a_df = temp_a_df.clone()
-                    else:
-                        # 确保必要的列存在
-                        for col in ['平均交易次数', '平均资金使用率']:
-                            if col not in cached_a_df.columns:
-                                cached_a_df = cached_a_df.with_columns(pl.lit(None).alias(col))
-                        # 合并数据
-                        cached_a_df = pl.concat([cached_a_df, temp_a_df], rechunk=True)
-                    # 排序
-                    cached_a_df = cached_a_df.sort(
-                        by=['周期胜率','平均胜率', '平均收益率'], 
-                        descending=[True,True, True]
-                    )
-                    # 保存到缓存
-                    cache.set_csv_pl(f"a_{thread_result_file}", cached_a_df)
-                
-                # 清空临时数据，准备下一批
-                temp_a_data = []
-        
-        # 处理剩余的策略数据
-        if temp_a_data:
-            # 转换为Polars DataFrame
-            if temp_a_data:
-                temp_a_df = pl.DataFrame(temp_a_data)
+            # 直接将new_row转换为DataFrame并处理
+            new_data_df = pl.DataFrame([new_row])
+            if cached_a_df.is_empty():
+                cached_a_df = new_data_df
             else:
-                # 明确指定列类型，避免类型不兼容问题
-                temp_a_df = self._create_empty_a_df()
+                cached_a_df = self._merge_and_sort_data(cached_a_df, new_data_df)
             
-            # 保存线程本地缓存
-            if not temp_a_df.is_empty():
-                if cached_a_df.is_empty():
-                    cached_a_df = temp_a_df.clone()
-                else:
-                    # 确保必要的列存在
-                    for col in ['平均交易次数', '平均资金使用率']:
-                        if col not in cached_a_df.columns:
-                            cached_a_df = cached_a_df.with_columns(pl.lit(None).alias(col))
-                    # 合并数据
-                    cached_a_df = pl.concat([cached_a_df, temp_a_df], rechunk=True)
-                # 排序
-                cached_a_df = cached_a_df.sort(
-                    by=['周期胜率','平均胜率', '平均收益率'], 
-                    descending=[True, True, True]
-                )
-                # 保存到缓存
-                cache.set_csv_pl(f"a_{thread_result_file}", cached_a_df)
+            # 保存到缓存
+            self._save_cache(cache, cache_filename, cached_a_df)
 
     def _create_empty_a_df(self) -> pl.DataFrame:
         """创建空的a文件DataFrame"""
@@ -235,8 +171,51 @@ class Chain:
             '配置': pl.Series([], dtype=pl.String)
         })
     
+    def _load_cache(self, cache: LocalCache, filename: str) -> pl.DataFrame:
+        """加载缓存，如果不存在则创建空的DataFrame"""
+        df = cache.get_csv_pl(filename)
+        return df if df is not None else self._create_empty_a_df()
+    
+    def _save_cache(self, cache: LocalCache, filename: str, df: pl.DataFrame) -> None:
+        """保存DataFrame到缓存"""
+        if not df.is_empty():
+            cache.set_csv_pl(filename, df)
+    
+    def _merge_and_sort_data(self, target_df: pl.DataFrame, new_df: pl.DataFrame, sort_by: list = None, descending: list = None) -> pl.DataFrame:
+        """合并数据并排序"""
+        if sort_by is None:
+            sort_by = ['周期胜率','平均胜率', '平均收益率']
+        if descending is None:
+            descending = [True, True, True]
+        
+        # 确保必要的列存在
+        for col in ['平均交易次数', '平均资金使用率']:
+            if col not in target_df.columns:
+                target_df = target_df.with_columns(pl.lit(None).alias(col))
+        
+        # 合并数据
+        merged_df = pl.concat([target_df, new_df], rechunk=True)
+        
+        # 排序
+        return merged_df.sort(by=sort_by, descending=descending)
+    
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str) -> dict:
         """创建新的行数据"""
+        if not results:
+            # 当results为空时，返回默认值
+            return {
+                "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
+                "平均胜率": "0%",
+                "平均收益率": "0.00%",
+                "平均交易次数": 0.0,
+                "最大资金": 0.0,
+                "最小资金": 0.0,
+                "夏普比率": 0.0,
+                "平均资金使用率": "0.00%",
+                "配置": cache_key
+            }
+        
+        # 当results不为空时，计算各项指标
         return {
             "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
             "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
@@ -250,25 +229,24 @@ class Chain:
         }
     
     def _merge_thread_caches(self) -> None:
-        """合并所有线程的缓存文件"""
+        """合并所有进程的缓存文件"""
         cache = LocalCache()
         
         # 加载主缓存
-        main_a_df = cache.get_csv_pl(f"a_{self.result_file}")
-        if main_a_df is None:
-            # 明确指定列类型，避免类型不兼容问题
-            main_a_df = self._create_empty_a_df()
+        main_cache_filename = f"a_{self.result_file}"
+        main_a_df = self._load_cache(cache, main_cache_filename)
         
-        # 合并所有线程的缓存
-        for thread_id in range(self.thread_count):
+        # 合并所有进程的缓存
+        for thread_id in range(self.processor_count):
             thread_result_file = f"{self.result_file}_thread_{thread_id}"
+            thread_cache_filename = f"a_{thread_result_file}"
             
-            # 合并a文件
-            thread_a_df = cache.get_csv_pl(f"a_{thread_result_file}")
+            # 加载进程缓存
+            thread_a_df = cache.get_csv_pl(thread_cache_filename)
             if thread_a_df is not None and not thread_a_df.is_empty():
                 main_a_df = pl.concat([main_a_df, thread_a_df], rechunk=True)
-                # 删除已合并的线程缓存文件
-                cache.delete_file(f"a_{thread_result_file}.csv")
+                # 删除已合并的进程缓存文件
+                cache.delete_file(f"{thread_cache_filename}.csv")
         
         # 去重并排序
         if not main_a_df.is_empty():
@@ -278,66 +256,58 @@ class Chain:
                 descending=[True, True]
             )
             # 保存到缓存
-            cache.set_csv_pl(f"a_{self.result_file}", main_a_df)
+            self._save_cache(cache, main_cache_filename, main_a_df)
         
-        print(f"合并完成，主文件 a_{self.result_file}.csv 包含 {len(main_a_df)} 条记录")
+        print(f"合并完成，主文件 a_{main_cache_filename}.csv 包含 {len(main_a_df)} 条记录")
 
     def execute(self) -> list:
-        # 先合并所有线程的缓存，确保中断后再运行时能正确加载之前的结果
+        # 先合并所有进程的缓存，确保中断后再运行时能正确加载之前的结果
         self._merge_thread_caches()
         
-        # 初始化主缓存
-        cache = LocalCache()
-        main_a_df = cache.get_csv_pl(f"a_{self.result_file}")
-        if main_a_df is None:
-            # 明确指定列类型，避免类型不兼容问题
-            main_a_df = self._create_empty_a_df()
+
         
-        # 获取已执行的策略键
-        executed_keys = set()
-        if '配置' in main_a_df.columns:
-            executed_keys.update(main_a_df['配置'].to_list())
-        
-        # 过滤掉已执行的策略（如果不是调试模式）
-        remaining_strategies = []
-        for s in self.strategies:
-            cache_key = "|".join(",".join(map(str, arr)) for arr in [[s.get('base_param_arr')[1]], s.get('buy_param_arr'), s.get('sell_param_arr')])
-            if cache_key not in executed_keys or self.chain_debug:
-                remaining_strategies.append(s)
-        
-        total_strategies = len(remaining_strategies)
+        total_strategies = len(self.strategies)
         print(f"总策略数: {len(self.strategies)}, 已执行: {len(self.strategies) - total_strategies}, 剩余: {total_strategies}")
-        print(f"使用进程数: {self.thread_count}")
+        print(f"使用进程数: {self.processor_count}")
         
         if total_strategies == 0:
             print("所有策略已执行完毕，无需处理")
             return
         
         # 策略分组
-        group_size = total_strategies // self.thread_count
+        group_size = total_strategies // self.processor_count
         strategy_groups = []
-        for i in range(self.thread_count):
+        for i in range(self.processor_count):
             start_idx = i * group_size
-            end_idx = (i + 1) * group_size if i < self.thread_count - 1 else total_strategies
-            strategy_groups.append(remaining_strategies[start_idx:end_idx])
-            print(f"进程 {i} 处理策略数: {len(remaining_strategies[start_idx:end_idx])}")
+            end_idx = (i + 1) * group_size if i < self.processor_count - 1 else total_strategies
+            strategy_groups.append(self.strategies[start_idx:end_idx])
+            print(f"进程 {i} 处理策略数: {len(self.strategies[start_idx:end_idx])}")
         
-        # 并行处理
+        # 处理策略组
         import multiprocessing
-        print(f"创建进程，最大进程数: {self.thread_count}")
+        print(f"处理策略，进程数: {self.processor_count}")
         processes = []
         
-        # 创建并启动进程
-        for i, group in enumerate(strategy_groups):
-            process_name = f"ChainProcess-{i}"
-            process = multiprocessing.Process(
-                target=self._process_strategy_group,
-                args=(group, i),
-                name=process_name
-            )
-            processes.append(process)
-            process.start()
-            print(f"启动进程: {process_name}，处理策略数: {len(group)}")
+        if self.processor_count == 1:
+            # 单进程时直接在当前进程执行
+            print(f"单进程模式，直接在当前进程执行")
+            # 直接调用处理方法
+            self._process_strategy_group(strategy_groups[0], 0)
+        else:
+            # 多进程时创建进程
+            print(f"多进程模式，创建进程数: {self.processor_count}")
+            
+            # 创建并启动进程
+            for i, group in enumerate(strategy_groups):
+                process_name = f"ChainProcess-{i}"
+                process = multiprocessing.Process(
+                    target=self._process_strategy_group,
+                    args=(group, i),
+                    name=process_name
+                )
+                processes.append(process)
+                process.start()
+                print(f"启动进程: {process_name}，处理策略数: {len(group)}")
         
         # 等待所有进程完成
         print("等待进程完成...")
@@ -345,7 +315,7 @@ class Chain:
             process.join()
             print(f"进程 {i} ({process.name}) 处理完成")
         
-        # 所有策略执行完成后，合并所有线程的缓存
+        # 所有策略执行完成后，合并所有进程的缓存
         self._merge_thread_caches()
         
         print("所有策略执行完成")
