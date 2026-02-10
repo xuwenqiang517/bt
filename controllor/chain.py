@@ -97,11 +97,9 @@ class Chain:
         """处理一组策略"""
         # 设置进程名称
         import multiprocessing
-        import setproctitle
         current_process = multiprocessing.current_process()
         process_name = f"ChainProcess-{thread_id}"
         current_process.name = process_name
-        setproctitle.setproctitle(process_name)
         print(f"进程 {thread_id} ({process_name}) 开始处理，策略数: {len(strategy_group)}")
         # 为每个线程创建独立的缓存
         cache = LocalCache()
@@ -383,13 +381,13 @@ class Chain:
             print("=" * 50)
             print(f"时间周期: {result.起始日期} 至 {result.结束日期}")
             print(f"资金: {result.初始资金/100:.2f} - > {result.最终资金/100:.2f}")
-            print(f"总收益率: {result.总收益率:.2f}%")
-            print(f"胜率: {result.胜率:.2f}%")
+            print(f"总收益率: {result.总收益率*100:.2f}%")
+            print(f"胜率: {result.胜率*100:.2f}%")
             print(f"交易次数: {result.交易次数}")
             print(f"最大资金: {result.最大资金/100:.2f}")
             print(f"最小资金: {result.最小资金/100:.2f}")
             print(f"夏普比率: {result.夏普比率:.2f}")
-            print(f"平均资金使用率: {result.平均资金使用率:.2f}%")
+            print(f"平均资金使用率: {result.平均资金使用率*100:.2f}%")
             print("=" * 50)
         
         return result

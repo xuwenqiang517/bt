@@ -16,7 +16,8 @@ class Strategy:
     STRATEGY_MAP = {
         "静态止损": "stop_loss",
         "静态止盈": "stop_profit",
-        "累计涨幅卖出": "cumulative_return_sell"
+        "累计涨幅卖出": "cumulative_return_sell",
+        "移动止盈": "trailing_stop_profit"
     }
     
     def __init__(self, base_param_arr: list, sell_param_arr: list, buy_param_arr: list, debug: bool):
@@ -175,7 +176,7 @@ class Strategy:
             if buy_count <= 0:
                 continue
             
-            hold_stock = HoldStock(code, next_open, buy_count, today, None, None)
+            hold_stock = HoldStock(code, next_open, buy_count, today)
             self._add_hold(hold_stock)
             cost_cents = buy_count * next_open
             self.free_amount -= cost_cents
@@ -186,6 +187,7 @@ class Strategy:
                 print(f"日期 {today} 买入 {code} , {next_open/100:.2f} * {buy_count} = {cost:.2f} ,剩余资金 {free_amount:.2f}")
 
     def sell(self) -> None:
+        is_debug=self.debug
         """执行卖出操作"""
         hold = self.hold
         if not hold:
@@ -214,7 +216,7 @@ class Strategy:
             # StockDataTuple 不会为空，因为它是一个包含数据的命名元组
             
             if is_empty:
-                if self.debug:
+                if is_debug:
                     print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
                 continue
             
@@ -232,7 +234,8 @@ class Strategy:
                 # 调用对应的策略函数
                 need_sell, sell_price, reason = strategy_func(hold_stock, stock_data, params)
                 # 设置颜色
-                reason = f"\033[91m{reason}\033[0m" if sell_price > hold_stock.buy_price else f"\033[92m{reason}\033[0m"
+                if is_debug:
+                    reason = f"\033[91m{reason}\033[0m" if sell_price > hold_stock.buy_price else f"\033[92m{reason}\033[0m"
                 # 如果某个策略触发卖出，则不再检查其他策略
                 if need_sell:
                     break
@@ -270,7 +273,7 @@ class Strategy:
                     'reason': sell_reason
                 })
                 
-                if self.debug:
+                if is_debug:
                     free_amount = self.free_amount / 100
                     profit = profit_cents // 100
                     print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {free_amount:.2f}")
@@ -285,12 +288,13 @@ class Strategy:
         # 缓存常用值
         open_price = stock_data['open'][0]
         low_price = stock_data['low'][0]
+        is_debug=self.debug
         if open_price <= stop_loss_price:
-            if self.debug:
+            if is_debug:
                 return True, open_price, f"开盘价{open_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以开盘价{open_price/100:.2f}卖出"
             return True, open_price, EMPTY_STRING
         elif low_price <= stop_loss_price:
-            if self.debug:
+            if is_debug:
                 return True, stop_loss_price, f"盘中最低价{low_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params.rate):.2%}),以止损价{stop_loss_price/100:.2f}卖出"
             return True, stop_loss_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
@@ -304,12 +308,13 @@ class Strategy:
         # 缓存常用值
         open_price = stock_data['open'][0]
         high_price = stock_data['high'][0]
+        is_debug=self.debug
         if open_price >= stop_profit_price:
-            if self.debug:
+            if is_debug:
                 return True, open_price, f"开盘价{open_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以开盘价{open_price/100:.2f}卖出"
             return True, open_price, EMPTY_STRING
         elif high_price >= stop_profit_price:
-            if self.debug:
+            if is_debug:
                 return True, stop_profit_price, f"盘中最高价{high_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params.rate:.2%}),以止盈价{stop_profit_price/100:.2f}卖出"
             return True, stop_profit_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
@@ -327,13 +332,36 @@ class Strategy:
         # 缓存常用值
         close_price = stock_data['close'][0]
         open_price = stock_data['open'][0]
+        is_debug=self.debug
         # 计算累计涨幅
         cumulative_return = (close_price - hold.buy_price) / hold.buy_price
         # 如果累计涨幅没达到最小要求，以开盘价卖出
         if cumulative_return < params.min_return:
-            if self.debug:
+            if is_debug:
                 return True, open_price, f"持仓{params.days}天 累计涨幅{cumulative_return:.2%}<{params.min_return:.2%}，以开盘价{open_price/100:.2f}卖出"
             return True, open_price, EMPTY_STRING
+        
+        return False, 0, EMPTY_STRING
+
+    def trailing_stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame | dict, params: TrailingStopProfitParams) -> tuple[bool, int, str]:
+        """
+        移动止盈策略：从最高持仓价格回撤指定百分比后卖出
+        """
+        # 计算止盈价（最高价格 * (1 - 回撤率)）
+        trailing_stop_price = int(hold.highest_price * (1 - params.rate))
+        
+        # 缓存常用值
+        open_price = stock_data['open'][0]
+        low_price = stock_data['low'][0]
+        is_debug=self.debug
+        if open_price <= trailing_stop_price:
+            if is_debug:
+                return True, open_price, f"开盘价{open_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params.rate:.2%}),以开盘价{open_price/100:.2f}卖出"
+            return True, open_price, EMPTY_STRING
+        elif low_price <= trailing_stop_price:
+            if is_debug:
+                return True, trailing_stop_price, f"盘中最低价{low_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params.rate:.2%}),以移动止盈价{trailing_stop_price/100:.2f}卖出"
+            return True, trailing_stop_price, EMPTY_STRING
         
         return False, 0, EMPTY_STRING
 
@@ -344,7 +372,7 @@ class Strategy:
         today = self.today
         hold = self.hold
         data_cache = self._today_data_cache
-        debug = self.debug
+        is_debug = self.debug
         
         for hold_stock in hold:
             code = hold_stock.code
@@ -359,17 +387,23 @@ class Strategy:
             # StockDataTuple 不会为空，因为它是一个包含数据的命名元组
             
             if is_empty:
-                if debug:
+                if is_debug:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
             else:
                 close_price = stock_data['close'][0]
+                high_price = stock_data['high'][0]
                 buy_price = hold_stock.buy_price
                 buy_count = hold_stock.buy_count
                 
-                if debug:
+                if high_price > hold_stock.highest_price:
+                    # 更新最高持仓价格
+                    hold_stock.update_highest_price(high_price)
+                
+                if is_debug:
                     profit_cents = (close_price - buy_price) * buy_count
                     profit_rate = (close_price - buy_price) / buy_price
-                    print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 价格{buy_price/100:.2f}->{close_price/100:.2f} 累计: {profit_cents//100:.2f} ({profit_rate:.2%})")
+                    highest_price = hold_stock.highest_price
+                    print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计: {profit_cents/100:.2f} ({profit_rate:.2%})")
                 
                 hold_amount += close_price * buy_count
         
@@ -379,7 +413,7 @@ class Strategy:
         # 记录每日资产
         self.daily_values.append({'date': today, 'value': total_value, 'free_amount': free_amount})
         
-        if debug:
+        if is_debug:
             free_amount_元 = free_amount / 100
             hold_amount_元 = hold_amount / 100
             total_value_元 = total_value / 100
