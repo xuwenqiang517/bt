@@ -332,8 +332,7 @@ class Strategy:
         """
         days=params[0] # 持仓天数阈值
         min_return=params[1] # 目标涨幅
-        min_profit_threshold=params[2] # 最低盈利阈值
-        trailing_stop_rate=params[3] # 移动止盈回撤率
+        trailing_stop_rate=params[2] # 移动止盈回撤率
         
         # 计算持仓天数
         hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
@@ -347,22 +346,32 @@ class Strategy:
         actual_return = (open_price - hold.buy_price) / hold.buy_price
         
         if hold_days <= days:
-            # 补丁1：如果X天内已经盈利（哪怕没到目标），可以不卖，避免"卖飞小赚标的"
-            if overall_return < min_return and actual_return <= 0:
-                # 只卖"没达标且没赚钱"的，小赚的留着
+            # 如果X天内没到目标收益，不管小赚还是小亏，都要卖出去
+            if overall_return < min_return:
+                # 卖"没达标"的，不管是否盈利
                 if is_debug:
-                    return True, open_price, f"持仓{hold_days}天 涨幅{actual_return:.2%}<目标涨幅{min_return:.2%}且未盈利，以开盘价{open_price/100:.2f}卖出"
+                    return True, open_price, f"持仓{hold_days}天 涨幅{actual_return:.2%}<目标涨幅{min_return:.2%}，以开盘价{open_price/100:.2f}卖出"
                 return True, open_price, EMPTY_STRING
         else:
-            # 补丁2：移动止盈前先锁定"最低盈利"，比如至少赚2%才触发移动止盈
-            # 计算当前价与最高价的回撤
-            drawdown = (close_price - hold.highest_price) / hold.highest_price if hold.highest_price > 0 else 0
-            
-            if overall_return >= min_profit_threshold and drawdown <= -trailing_stop_rate:
-                # 卖出（移动止盈：赚够基础利润后，再用回撤保护）
-                if is_debug:
-                    return True, open_price, f"整体涨幅{overall_return:.2%}>=最低盈利阈值{min_profit_threshold:.2%}且回撤{drawdown:.2%}<=-{trailing_stop_rate:.2%}，以开盘价{open_price/100:.2f}卖出"
-                return True, open_price, EMPTY_STRING
+            # 移动止盈：基于上一天的最高价和回撤率计算止盈价格
+            # 计算止盈价格 = 最高价 * (1 - 回撤率)
+            if hold.highest_price > 0:
+                stop_profit_price = int(hold.highest_price * (1 - trailing_stop_rate / 100))
+                
+                # 获取当日最低价
+                low_price = stock_data['low'][0]
+                
+                # 比较开盘价和最低价与止盈价格的关系
+                if open_price <= stop_profit_price:
+                    # 开盘价比止盈价格低，以开盘价卖出
+                    if is_debug:
+                        return True, open_price, f"移动止盈：开盘价{open_price/100:.2f}<=止盈价{stop_profit_price/100:.2f}，以开盘价{open_price/100:.2f}卖出"
+                    return True, open_price, EMPTY_STRING
+                elif low_price <= stop_profit_price:
+                    # 最低价跌破止盈价格，以止盈价格卖出
+                    if is_debug:
+                        return True, stop_profit_price, f"移动止盈：最低价{low_price/100:.2f}<=止盈价{stop_profit_price/100:.2f}，以止盈价{stop_profit_price/100:.2f}卖出"
+                    return True, stop_profit_price, EMPTY_STRING
         
         return False, 0, EMPTY_STRING
 

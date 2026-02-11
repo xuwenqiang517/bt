@@ -38,6 +38,8 @@ class StockData:
         print(f"4. 构建数据索引")
         self.date_df_dict=self.convert(processed_stock_data_df)
 
+    # 选票过滤
+
     def calc_tech_pl(self,df: pl.DataFrame) -> pl.DataFrame:
         df_tech = df.lazy().with_columns([
                 # 计算涨跌幅和下一天开盘价
@@ -49,30 +51,31 @@ class StockData:
                 pl.col("volume").rolling_mean(window_size=5).cast(pl.Int32).alias("ma5_vol"),
                 pl.col("volume").rolling_mean(window_size=10).cast(pl.Int32).alias("ma10_vol")
             ]).with_columns([
+                # # 计算change_pct是否在3%到5%之间
+                # pl.col("change_pct").is_between(3, 5).cast(pl.Int8).alias("change_pct_between_3_5"),
+                # # 计算成交量排名
+                # pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("volume_rank"),
                 # 涨跌幅是float32，直接计算
                 pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d"),
-                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d"),
-                # 计算change_pct是否在3%到5%之间
-                pl.col("change_pct").is_between(3, 5).cast(pl.Int8).alias("change_pct_between_3_5"),
-                # 计算成交量排名
-                pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("volume_rank")
+                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d")
             ]).with_columns([
                 pl.Series(
                     name="consecutive_up_days",
                     values=self.calc_up_days(df["close"].to_numpy()),  # 转为numpy数组适配原函数
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
                 )
-            ]).with_columns([
-                # 计算has_limit_up_20d：判断20天内是否有涨停（涨幅>=9.9%）
-                (pl.col("change_pct").rolling_max(window_size=20) >= 9.9).cast(pl.Int8).alias("has_limit_up_20d"),
-                # 计算ma_up：当日成交>=1.5 * ma5 & ma5>ma10 为1，否则为0
-                ((pl.col("volume") >= pl.col("ma5_vol") * 1.5 ) & (pl.col("ma5_vol") > pl.col("ma10_vol"))).cast(pl.Int8).alias("ma_vol_up")
-            ]).with_columns([
-                # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件
-                ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up"),
-                # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件，且change_pct_between_3_5为1
-                ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1) & (pl.col("change_pct_between_3_5") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up_3_5")
             ]).drop(["ma5_vol", "ma10_vol"]).collect()
+            # .with_columns([
+            #     # 计算has_limit_up_20d：判断20天内是否有涨停（涨幅>=9.9%）
+            #     (pl.col("change_pct").rolling_max(window_size=20) >= 9.9).cast(pl.Int8).alias("has_limit_up_20d"),
+            #     # 计算ma_up：当日成交>=1.5 * ma5 & ma5>ma10 为1，否则为0
+            #     ((pl.col("volume") >= pl.col("ma5_vol") * 1.5 ) & (pl.col("ma5_vol") > pl.col("ma10_vol"))).cast(pl.Int8).alias("ma_vol_up")
+            # ]).with_columns([
+            #     # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件
+            #     ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up"),
+            #     # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件，且change_pct_between_3_5为1
+            #     ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1) & (pl.col("change_pct_between_3_5") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up_3_5")
+            # ]).drop(["ma5_vol", "ma10_vol"]).collect()
         
         return df_tech
 
@@ -86,7 +89,7 @@ class StockData:
                 trade_date = trade_date[0]
             if group is None or group.is_empty():
                 continue
-            # 按volume_rank 从低到高排序，表示成交量排名靠前
+            # 按成交额从高到低排序，表示当天成交活跃的股票靠前
             group=group.sort("amount" ,descending=True)
             date_dict[trade_date] = group
         return date_dict

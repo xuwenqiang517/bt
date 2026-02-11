@@ -112,8 +112,8 @@ class Chain:
         # 计算固定值，避免在循环中重复计算
         total_count = len(self.date_arr)
         count=0
-        # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰
-        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True):
+        # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰，设置最小更新间隔减少输出频率
+        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True, mininterval=5):
             count+=1
             strategy = UpStrategy(**params)
             results = []

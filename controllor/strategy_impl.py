@@ -47,12 +47,12 @@ class UpStrategy(Strategy):
     #     self._pick_sorter = sorter_func
     
     def init_sell_strategy_chain(self):
-        sell1, sell2, sell3, sell4, sell5 = self.sell_param_arr
+        sell1, sell2, sell3, sell4 = self.sell_param_arr
         strategies = []
         # if sell1 is not None:
         strategies.append(SellStrategy("静态止损", sell1/100.0))
         # 贪婪止盈：需要days, min_return, trailing_stop_rate三个参数
-        strategies.append(SellStrategy("贪婪止盈", (sell2, sell3/100.0, sell4/100.0, sell5/100.0)))
+        strategies.append(SellStrategy("贪婪止盈", (sell2, sell3/100.0, sell4/100.0)))
         # 假设sell_param_arr的第五个参数用于时间止盈
         # if len(self.sell_param_arr) >= 5 and self.sell_param_arr[4] is not None:
         #     time_days = 
