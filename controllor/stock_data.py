@@ -17,7 +17,7 @@ class StockData:
         if datetime.now().hour < 15:
             today=(date.today()-timedelta(days=1)).strftime("%Y%m%d")
         cache=lc()
-        self.use_all_cache=True
+        self.use_all_cache=1
 
         print(f"1. 获取股票列表")
         stock_list_df=self.get_stock_list(today,cache)
@@ -170,13 +170,13 @@ class StockData:
     def calc_tech_pl(self,df: pl.DataFrame) -> pl.DataFrame:
         df_tech = df.lazy().with_columns([
                 # 涨跌幅是float32，直接计算
-                pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d"),
-                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d"),
-                pl.col("change_pct").rolling_sum(window_size=10).round(2).cast(pl.Float32).alias("change_10d"),
-                # 计算成交量的MA5和MA10
-                pl.col("volume").rolling_mean(window_size=5).alias("ma5_vol"),
-                pl.col("volume").rolling_mean(window_size=10).alias("ma10_vol"),
-                pl.col("volume").rolling_mean(window_size=20).alias("ma20_vol")
+                pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d")
+                ,pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d")
+                # ,pl.col("change_pct").rolling_sum(window_size=10).round(2).cast(pl.Float32).alias("change_10d")
+                ,# 计算成交量的MA5和MA10
+                pl.col("volume").rolling_mean(window_size=5).cast(pl.Int32).alias("ma5_vol")
+                ,pl.col("volume").rolling_mean(window_size=10).cast(pl.Int32).alias("ma10_vol")
+                # ,pl.col("volume").rolling_mean(window_size=20).cast(pl.Int32).alias("ma20_vol")
             ]).with_columns([
                 pl.Series(
                     name="consecutive_up_days",
@@ -185,8 +185,8 @@ class StockData:
                 )
             ]).with_columns([
                 pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("vol_rank"),  # 使用int16存储排名
-                # 计算ma_up：MA5 > MA10 && MA5 > MA20 为1，否则为0
-                ((pl.col("ma5_vol") > pl.col("ma10_vol") ) & (pl.col("ma5_vol") > pl.col("ma20_vol"))).cast(pl.Int8).alias("ma_up")
+                # 计算ma_up：当日成交>=1.5 * ma5 & ma5>ma10 为1，否则为0
+                ((pl.col("volume") >= pl.col("ma5_vol") * 1.5 ) & (pl.col("ma5_vol") > pl.col("ma10_vol"))).cast(pl.Int8).alias("ma_up")
             ]).collect()
         
         return df_tech

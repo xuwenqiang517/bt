@@ -1,7 +1,7 @@
 from stock_calendar import StockCalendar as sc
 from chain import Chain
 import random
-def bt_all():
+def bt_all(processor_count):
     day_array=sc().get_date_arr()
     result_file=f"all_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-vol_rank正排"
     # 定义策略参数字典列表（不创建对象，省内存）
@@ -10,7 +10,7 @@ def bt_all():
         for buy1 in range(2,4,1): # 连涨天数
             for buy2 in range(3,10,2): # 3日涨幅最低
                 for buy3 in range(5,15,2): # 5日涨幅最低
-                    for sell1 in range(-10,-4,1): # 止损率（负数，如-5表示-5%）
+                    for sell1 in range(-5,-1,1): # 止损率（负数，如-5表示-5%）
                         for sell2 in range(3,6,1): # 持仓天数
                             for sell3 in range(2,15,1): # 目标涨幅
                                 for sell4 in range(3,10,1): # 最低盈利阈值
@@ -30,7 +30,7 @@ def bt_all():
         ,"date_arr":day_array
         ,"chain_debug":0
         ,"result_file":result_file
-        ,"processor_count":4
+        ,"processor_count":processor_count
     }
     chain = Chain(param=param)
     chain.execute()
@@ -57,7 +57,7 @@ def bt_one(strategy_params,day_array):
 
 
 if __name__ == "__main__":
-    bt_all()
+    bt_all(1)
     # bt_one("2|3,5,10|-5,3,10,2,5",[["20250101","20250201"]])
     # bt_one("2|3,5,10|-5,10",[["20250101","20250201"]])
     # bt_one("2|3,5,10|-5,10",[["20250101","20260101"]])

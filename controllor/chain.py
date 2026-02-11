@@ -94,12 +94,6 @@ class Chain:
 
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
         """处理一组策略"""
-        # 设置进程名称
-        import multiprocessing
-        current_process = multiprocessing.current_process()
-        process_name = f"ChainProcess-{thread_id}"
-        current_process.name = process_name
-        print(f"进程 {thread_id} ({process_name}) 开始处理，策略数: {len(strategy_group)}")
         # 为每个进程创建独立的缓存
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
@@ -115,9 +109,10 @@ class Chain:
         
         # 计算固定值，避免在循环中重复计算
         total_count = len(self.date_arr)
-        
+        count=0
         # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰
         for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True):
+            count+=1
             strategy = UpStrategy(**params)
             results = []
             failure_count = 0
@@ -127,13 +122,13 @@ class Chain:
                 result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
-                if result.总收益率 <= 0:
+                if result.总收益率 <= 0 or result.胜率 <= 0.4:
                     failure_count += 1
-                    if not is_debug:
+                    if failure_count>1 and not is_debug:
                         break
                 results.append(result)
 
-            if failure_count>0 and not is_debug:
+            if failure_count>1 and not is_debug:
                 continue
 
             successful_count=total_count-failure_count
@@ -145,7 +140,7 @@ class Chain:
             if is_debug:
                 if 'new_row' in locals():
                     print(f"进程 {thread_id}: {new_row}")
-                # self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
+                self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
             
             # 直接将new_row转换为DataFrame并处理
             new_data_df = pl.DataFrame([new_row])
@@ -154,8 +149,10 @@ class Chain:
             else:
                 cached_a_df = self._merge_and_sort_data(cached_a_df, new_data_df)
             
-            # 保存到缓存
-            self._save_cache(cache, cache_filename, cached_a_df)
+            if count%100==0:
+                # 保存到缓存
+                cached_a_df = self._sort_data(cached_a_df)
+                self._save_cache(cache, cache_filename, cached_a_df)
 
     def _create_empty_a_df(self) -> pl.DataFrame:
         """创建空的a文件DataFrame"""
@@ -181,23 +178,19 @@ class Chain:
         if not df.is_empty():
             cache.set_csv_pl(filename, df)
     
-    def _merge_and_sort_data(self, target_df: pl.DataFrame, new_df: pl.DataFrame, sort_by: list = None, descending: list = None) -> pl.DataFrame:
+    def _merge_and_sort_data(self, target_df: pl.DataFrame, new_df: pl.DataFrame) -> pl.DataFrame:
         """合并数据并排序"""
-        if sort_by is None:
-            sort_by = ['周期胜率','平均胜率', '平均收益率']
-        if descending is None:
-            descending = [True, True, True]
-        
         # 确保必要的列存在
         for col in ['平均交易次数', '平均资金使用率']:
             if col not in target_df.columns:
                 target_df = target_df.with_columns(pl.lit(None).alias(col))
         
         # 合并数据
-        merged_df = pl.concat([target_df, new_df], rechunk=True)
-        
-        # 排序
-        return merged_df.sort(by=sort_by, descending=descending)
+        return pl.concat([target_df, new_df], rechunk=True)
+
+    def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
+        """排序DataFrame"""
+        return df.sort(by=['周期胜率','平均胜率', '平均收益率'], descending=[True, True, True])
     
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str) -> dict:
         """创建新的行数据"""
