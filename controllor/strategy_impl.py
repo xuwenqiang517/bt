@@ -26,10 +26,12 @@ class UpStrategy(Strategy):
             # )
             return (
                     # 新增条件：ma_up为1
-                    (df["has_limit_up_and_vol_up_3_5"] == 1)
-                    & (df["consecutive_up_days"] >= buy_up_day_min)
+                    # (df["has_limit_up_and_vol_up_3_5"] == 1)
+                    # &
+                      (df["consecutive_up_days"] >= buy_up_day_min)
                     & (df["change_3d"] >= buy_day3_min)
                     & (df["change_5d"] >= buy_day5_min)
+                    & (df["change_pct"] <5)
                 )
         self._pick_filter = filter_func
     

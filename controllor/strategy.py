@@ -159,7 +159,7 @@ class Strategy:
         free_amount = self.free_amount
         # 单只股票最大购买金额
         buy_amount_per_stock_cents = free_amount // remaining_hold_count
-        buy_amount_per_stock_cents = min(2000000, buy_amount_per_stock_cents)
+        # buy_amount_per_stock_cents = min(2000000, buy_amount_per_stock_cents)
 
         
         # 计算买入的票的数量 按今天的开盘价买

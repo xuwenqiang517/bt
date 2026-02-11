@@ -24,24 +24,36 @@ class StockData:
         stock_list_df=self.get_stock_list(today,cache)
         print(f"2. 获取股票数据")
         stock_data_df=self.get_stock_data_pl(stock_list_df,today,cache)
-        print(f"3. 构建数据索引")
-        self.date_df_dict=self.convert(stock_data_df)
+        print(f"3. 计算技术指标")
+        # 按code分组并应用calc_tech_pl
+        grouped = stock_data_df.group_by("code")
+        processed_dfs = []
+        for code, group in grouped:
+            # 确保按日期排序
+            sorted_group = group.sort("date")
+            tech_df = self.calc_tech_pl(sorted_group)
+            processed_dfs.append(tech_df)
+        # 合并所有处理后的数据
+        processed_stock_data_df = pl.concat(processed_dfs)
+        print(f"4. 构建数据索引")
+        self.date_df_dict=self.convert(processed_stock_data_df)
 
     def calc_tech_pl(self,df: pl.DataFrame) -> pl.DataFrame:
         df_tech = df.lazy().with_columns([
+                # 计算涨跌幅和下一天开盘价
+                ((pl.col("close") - pl.col("close").shift(1)) / pl.col("close").shift(1) * 100).round(2).fill_null(0).cast(pl.Float32).alias("change_pct"),
+                pl.col("open").shift(-1).alias("next_open"),
+                # 计算成交量的MA5和MA10
+                pl.col("volume").rolling_mean(window_size=5).cast(pl.Int32).alias("ma5_vol"),
+                pl.col("volume").rolling_mean(window_size=10).cast(pl.Int32).alias("ma10_vol")
+            ]).with_columns([
                 # 涨跌幅是float32，直接计算
-                pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d")
-                ,pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d")
+                pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d"),
+                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d"),
                 # 计算change_pct是否在3%到5%之间
-                ,pl.col("change_pct").is_between(3, 5).cast(pl.Int8).alias("change_pct_between_3_5")
-                # ,pl.col("change_pct").rolling_sum(window_size=10).round(2).cast(pl.Float32).alias("change_10d")
-                ,# 计算成交量的MA5和MA10
-                pl.col("volume").rolling_mean(window_size=5).cast(pl.Int32).alias("ma5_vol")
-                ,pl.col("volume").rolling_mean(window_size=10).cast(pl.Int32).alias("ma10_vol")
-                # ,pl.col("volume").rolling_mean(window_size=20).cast(pl.Int32).alias("ma20_vol")
-                # 计算收盘价的MA5和MA20
-                # ,pl.col("close").rolling_mean(window_size=5).cast(pl.Int32).alias("ma5_close")
-                # ,pl.col("close").rolling_mean(window_size=20).cast(pl.Int32).alias("ma20_close")
+                pl.col("change_pct").is_between(3, 5).cast(pl.Int8).alias("change_pct_between_3_5"),
+                # 计算成交量排名
+                pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("volume_rank")
             ]).with_columns([
                 pl.Series(
                     name="consecutive_up_days",
@@ -49,23 +61,10 @@ class StockData:
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
                 )
             ]).with_columns([
-                # pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("vol_rank"),  # 使用int16存储排名  历史最高成交量=1
-                # pl.col("close").rank(descending=True, method="min").cast(pl.Int16).alias("close_rank"),  # 使用int16存储价格排名  历史最高=1 
-                # 计算is_high20：判断当前收盘价是否是历史20天最高
-                # (pl.col("close") == pl.col("close").rolling_max(window_size=20)).cast(pl.Int8).alias("is_high20"),
-                
                 # 计算has_limit_up_20d：判断20天内是否有涨停（涨幅>=9.9%）
                 (pl.col("change_pct").rolling_max(window_size=20) >= 9.9).cast(pl.Int8).alias("has_limit_up_20d"),
                 # 计算ma_up：当日成交>=1.5 * ma5 & ma5>ma10 为1，否则为0
                 ((pl.col("volume") >= pl.col("ma5_vol") * 1.5 ) & (pl.col("ma5_vol") > pl.col("ma10_vol"))).cast(pl.Int8).alias("ma_vol_up")
-                # 计算成交量与MA5成交量的比例
-                # (pl.when(pl.col("ma5_vol").is_not_null() & (pl.col("ma5_vol") > 0))
-                #  .then((pl.col("volume") / pl.col("ma5_vol")).round(2))
-                #  .otherwise(0).cast(pl.Float32).alias("vol_ma5_ratio")),
-                # 计算均线多头斜率：(MA5 - MA20)/MA20 × 100，并处理null值
-                # (pl.when(pl.col("ma20_close").is_not_null() & (pl.col("ma20_close") > 0))
-                #  .then(((pl.col("ma5_close").fill_null(0) - pl.col("ma20_close").fill_null(0)) / pl.col("ma20_close") * 100).round(2))
-                #  .otherwise(0).cast(pl.Float32).alias("ma_slope"))
             ]).with_columns([
                 # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件
                 ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up"),
@@ -85,8 +84,8 @@ class StockData:
                 trade_date = trade_date[0]
             if group is None or group.is_empty():
                 continue
-            # 按ma_slope 从高到低排序，表示短期上涨动能足
-            group=group.sort("change_pct" ,descending=False)
+            # 按volume_rank 从低到高排序，表示成交量排名靠前
+            group=group.sort("volume_rank" ,descending=False)
             date_dict[trade_date] = group
         return date_dict
     
@@ -160,7 +159,6 @@ class StockData:
         stock_data = None
         if self.use_all_cache:
             stock_data = cache.get_pl(all_cache_file_name)
-
         if stock_data is None:
             print(f"缓存取股票数据 {all_cache_file_name} 失败，尝试从_tx获取")
             stock_data = pl.DataFrame()
@@ -193,14 +191,7 @@ class StockData:
                             # 成交量使用int32
                             pl.col("volume").cast(pl.Float32).fill_null(0).cast(pl.Int32).alias("volume")
                         )
-                        df = df.with_columns(
-                            # 涨跌幅使用float32
-                            ((pl.col("close") - pl.col("close").shift(1)) / pl.col("close").shift(1) * 100).round(2).fill_null(0).cast(pl.Float32).alias("change_pct"),
-                            # 下一天的价格也转换为分
-                            pl.col("open").shift(-1).alias("next_open"),
-                        )
-                        df = df.select(["code", "date", "open", "close", "high", "low", "volume", "change_pct", "next_open"])
-                        df = self.calc_tech_pl(df)
+                        df = df.select(["code", "date", "open", "close", "high", "low", "volume"])
                         stock_data = pl.concat([stock_data, df])
                 except Exception as e:
                     print(f"Error fetching data for {code}: {e}")
@@ -209,7 +200,7 @@ class StockData:
 
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        # cache.clean(prefix="stock_data_")
+        cache.clean(prefix="stock_data_")
         return stock_data
 
 
