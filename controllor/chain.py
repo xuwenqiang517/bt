@@ -19,6 +19,7 @@ class Chain:
         self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
         self.win_rate_threshold = param.get("win_rate_threshold", 0.99)  # 胜率阈值，默认65%
         self.processor_count = param.get("processor_count", 1)  # 进程数，默认1
+        self.fail_count = param.get("fail_count", 1)  # 允许失败次数，默认1
         
         self.param = param  # 原始参数
         self.result_file = param.get("result_file", None)  # 结果文件
@@ -47,7 +48,7 @@ class Chain:
         save_path = data_dir / file_name
         
         # 提取日期和资金值（将分转换为元）
-        dates = [dv['date'] for dv in daily_values]
+        dates = [f"{dv['date']:08d}" for dv in daily_values]
         values = [dv['value'] / 100 for dv in daily_values]
         
         # 调试信息
@@ -83,7 +84,7 @@ class Chain:
         
         plt.xticks(rotation=45)
         plt.tight_layout()
-        
+        # plt.show()
         # 保存图表
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close(fig)  # 关闭图表，释放内存
@@ -106,6 +107,7 @@ class Chain:
         # 加载进程本地缓存
         cache_filename = f"a_{thread_result_file}"
         cached_a_df = self._load_cache(cache, cache_filename)
+        fail_count=self.fail_count
         
         # 计算固定值，避免在循环中重复计算
         total_count = len(self.date_arr)
@@ -122,13 +124,16 @@ class Chain:
                 result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
-                if result.总收益率 <= 0 or result.胜率 <= 0.4:
+                # print(result)
+                # if result.总收益率 <= 0 or result.胜率 <= 0.4:
+                if result.总收益率 <= 0:
                     failure_count += 1
-                    if failure_count>1 and not is_debug:
+                    if failure_count>fail_count and not is_debug:
                         break
                 results.append(result)
 
-            if failure_count>1 and not is_debug:
+            if failure_count>fail_count and not is_debug:
+                # print(f"进程 {thread_id}: 策略 {params} 失败次数 {failure_count}")
                 continue
 
             successful_count=total_count-failure_count
@@ -136,7 +141,7 @@ class Chain:
 
             cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
             new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key)
-            
+            print(new_row)
             if is_debug:
                 if 'new_row' in locals():
                     print(f"进程 {thread_id}: {new_row}")
@@ -149,10 +154,12 @@ class Chain:
             else:
                 cached_a_df = self._merge_and_sort_data(cached_a_df, new_data_df)
             
-            if count%100==0:
+            if count%5==0:
                 # 保存到缓存
                 cached_a_df = self._sort_data(cached_a_df)
                 self._save_cache(cache, cache_filename, cached_a_df)
+        cached_a_df = self._sort_data(cached_a_df)
+        self._save_cache(cache, cache_filename, cached_a_df)
 
     def _create_empty_a_df(self) -> pl.DataFrame:
         """创建空的a文件DataFrame"""
@@ -186,11 +193,24 @@ class Chain:
                 target_df = target_df.with_columns(pl.lit(None).alias(col))
         
         # 合并数据
-        return pl.concat([target_df, new_df], rechunk=True)
+        merged_df = pl.concat([target_df, new_df], rechunk=True)
+        # 调用 _sort_data 方法进行排序
+        return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
         """排序DataFrame"""
-        return df.sort(by=['周期胜率','平均胜率', '平均收益率'], descending=[True, True, True])
+        # 先添加一个临时列，提取周期胜率的数值用于排序
+        df = df.with_columns(
+            pl.col('周期胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('周期胜率数值')
+        )
+        # 按照周期胜率数值、平均胜率和平均收益率排序
+        df = df.sort(
+            by=['周期胜率数值', '平均胜率', '平均收益率'], 
+            descending=[True, True, True]
+        )
+        # 删除临时列
+        df = df.drop('周期胜率数值')
+        return df
     
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str) -> dict:
         """创建新的行数据"""

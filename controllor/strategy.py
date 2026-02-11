@@ -67,12 +67,12 @@ class Strategy:
         """重置策略状态"""
         self.free_amount = self.init_amount
         self.hold: list[HoldStock] = []
-        self.hold_codes: set[str] = set()
+        self.hold_codes: set[int] = set()
         self.picked_data: pl.DataFrame | None = None
         self.trades_history: list[dict] = []
         self.daily_values: list[dict] = []
-        self.today: str | None = None
-        self._today_data_cache: dict[str, pl.DataFrame] = {}
+        self.today: int | None = None
+        self._today_data_cache: dict[int, pl.DataFrame] = {}
     
     def _ensure_today_data_loaded(self) -> None:
         """确保当日持仓股票数据已加载"""
@@ -88,7 +88,7 @@ class Strategy:
         self.hold.append(hold_stock)
         self.hold_codes.add(hold_stock.code)
     
-    def _remove_hold(self, code: str) -> HoldStock | None:
+    def _remove_hold(self, code: int) -> HoldStock | None:
         """移除持仓股票"""
         for i, hold in enumerate(self.hold):
             if hold.code == code:
@@ -155,8 +155,12 @@ class Strategy:
         
         # 计算每个股票买入金额（分）
         remaining_hold_count = max_hold_count - current_hold_count
+        
         free_amount = self.free_amount
+        # 单只股票最大购买金额
         buy_amount_per_stock_cents = free_amount // remaining_hold_count
+        buy_amount_per_stock_cents = min(2000000, buy_amount_per_stock_cents)
+
         
         # 计算买入的票的数量 按今天的开盘价买
         today = self.today
@@ -199,7 +203,7 @@ class Strategy:
         data_cache = self._today_data_cache
         sell_chain_list = getattr(self, 'sell_chain_list', [])
         
-        sells_info: list[tuple[str, int, str]] = []
+        sells_info: list[tuple[int, int, str]] = []
         for hold_stock in hold:
             code = hold_stock.code
             buy_day = hold_stock.buy_day
@@ -455,12 +459,12 @@ class Strategy:
             print(f"日期 {today} 持有股票总市值 {hold_amount_元:.2f}, 可用资金 {free_amount_元:.2f}, 总资产 {total_value_元:.2f}")
             print("\n")
     
-    def update_today(self, today: str) -> None:
+    def update_today(self, today: int) -> None:
         """更新当前日期"""
         self.today = today
         self._today_data_cache = {}
     
-    def calculate_performance(self, start_date: str, end_date: str) -> BacktestResult:
+    def calculate_performance(self, start_date: int, end_date: int) -> BacktestResult:
         """计算并返回策略性能指标"""
         # 缓存实例变量
         init_amount = self.init_amount
