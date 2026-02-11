@@ -1,61 +1,46 @@
 from datetime import date
-import pandas as pd
-import numpy as np
-from typing import NamedTuple
+import polars as pl
 
-from controllor.stock_calendar import StockCalendar as sc
-from controllor.stock_data import StockData as sd
+from stock_calendar import StockCalendar as sc
+from stock_data import StockData as sd
+from strategy_impl import UpStrategy
 
 
 class StockPicker:
     def __init__(self, config_str: str):
         """
         选股器初始化
-        config_str: 格式 "持仓数|连涨天数|3日涨幅最低|3日涨幅最高|5日涨幅最低|5日涨幅最高"
-        例如: "4|2,5,10,8,15" 表示持仓4只，其他参数对应
+        config_str: 格式 "最大持仓数|买入参数|卖出参数"
+        例如: "3|3,10,15|-15,5,7,6" 表示最大持仓3只，买入参数为[3,10,15]，卖出参数为[-15,5,7,6]
         """
         self.config_str = config_str
         parts = config_str.split("|")
+        
+        # 解析参数
         self.max_hold = int(parts[0])
         self.buy_params = list(map(int, parts[1].split(",")))
+        self.sell_params = list(map(int, parts[2].split(",")))
         
-        buy_up_day_min = self.buy_params[0]
-        buy_day3_min = self.buy_params[1]
-        buy_day3_max = self.buy_params[2]
-        buy_day5_min = self.buy_params[3]
-        buy_day5_max = self.buy_params[4]
-
+        # 创建基础参数
+        self.base_params = [10000000, self.max_hold]  # 初始资金和最大持仓数
+        
+        # 创建UpStrategy实例，复用其筛选和排序逻辑
+        self.strategy = UpStrategy(
+            base_param_arr=self.base_params,
+            sell_param_arr=self.sell_params,
+            buy_param_arr=self.buy_params,
+            debug=False
+        )
+        
+        # 构建筛选条件描述
         self._filter_params = {
-            "连涨天数≥": buy_up_day_min,
-            "3日涨幅": f"{buy_day3_min}% ~ {buy_day3_max}%",
-            "5日涨幅": f"{buy_day5_min}% ~ {buy_day5_max}%"
+            "连涨天数≥": self.buy_params[0],
+            "3日涨幅>": f"{self.buy_params[1]}%",
+            "5日涨幅>": f"{self.buy_params[2]}%",
+            "当日涨幅<": "5%"
         }
 
-        def filter_func(df: pd.DataFrame) -> np.ndarray:
-            col_consecutive = df["consecutive_up_days"].values
-            col_change3d = df["change_3d"].values
-            col_change5d = df["change_5d"].values
-            return (
-                (col_consecutive >= buy_up_day_min)
-                & (col_change3d >= buy_day3_min)
-                & (col_change3d <= buy_day3_max)
-                & (col_change5d >= buy_day5_min)
-                & (col_change5d <= buy_day5_max)
-            )
-        self._pick_filter = filter_func
-
-        max_hold = self.max_hold
-        def sorter_func(df: pd.DataFrame) -> pd.DataFrame:
-            n = min(max_hold, len(df))
-            if n <= 0:
-                return pd.DataFrame()
-            vol_rank_values = df["vol_rank"].values
-            top_n_indices = np.argpartition(vol_rank_values, n-1)[:n]
-            sorted_indices = top_n_indices[np.argsort(vol_rank_values[top_n_indices])]
-            return df.iloc[sorted_indices].reset_index(drop=True)
-        self._pick_sorter = sorter_func
-
-    def pick(self, target_date: str = None) -> pd.DataFrame:
+    def pick(self, target_date: str = None) -> pl.DataFrame:
         """
         选出指定日期符合条件的股票
         target_date: 目标日期，默认为明天（如果当前时间在15点前则是今天）
@@ -75,43 +60,87 @@ class StockPicker:
             print(f"   • {k}: {v}")
         print(f"{'='*50}\n")
 
-        today_stock_df = self.data.get_data_by_date(target_date)
-        if today_stock_df is None or today_stock_df.empty:
+        # 将target_date转换为整数，因为get_data_by_date只接受int类型参数
+        today_stock_df = self.data.get_data_by_date(int(target_date))
+        if today_stock_df is None or today_stock_df.is_empty():
             print(f"❌ 没有找到日期 {target_date} 的股票数据")
-            return pd.DataFrame()
+            return pl.DataFrame()
 
         print(f"📈 全部股票数量: {len(today_stock_df)}")
 
-        mask = self._pick_filter(today_stock_df)
-        filtered_stocks = today_stock_df[mask]
+        # 使用策略的筛选函数
+        mask = self.strategy._pick_filter(today_stock_df)
+        filtered_stocks = today_stock_df.filter(mask)
 
-        if filtered_stocks.empty:
+        if filtered_stocks.is_empty():
             print(f"😢 没有符合筛选条件的股票")
-            return pd.DataFrame()
+            return pl.DataFrame()
 
         print(f"🔍 筛选后股票数量: {len(filtered_stocks)}")
 
-        result = self._pick_sorter(filtered_stocks)
-        print(f"✅ 选出 {len(result)} 只股票（按vol_rank倒序）:\n")
+        # 限制结果数量并按成交额排序
+        n = min(self.max_hold, len(filtered_stocks))
+        if n > 0:
+            # 按成交额降序排序并取前n只
+            result = filtered_stocks.sort("amount", descending=True).head(n)
+            print(f"✅ 选出 {n} 只股票（按成交额排序）:\n")
 
-        print(f"{'代码':<10} {'收盘':<10} {'次日开盘':<10} {'连涨':<8} {'3日涨幅':<12} {'5日涨幅':<12} {'vol_rank':<10}")
-        print("-" * 75)
+            # 显示结果
+            print(f"{'代码':<10} {'收盘':<10} {'连涨':<8} {'3日涨幅':<12} {'5日涨幅':<12} {'当日涨幅':<10}")
+            print("-" * 75)
 
-        for idx, row in result.iterrows():
-            print(f"{row['code']:<10} {row['close']:<10.2f} {row['next_open']:<10.2f} "
-                  f"{row['consecutive_up_days']:<8} {row['change_3d']:<12.2f}% {row['change_5d']:<12.2f}% {row['vol_rank']:<10}")
+            for row in result.iter_rows(named=True):
+                # 处理可能的None值
+                code = row.get('code', '') or ''
+                close = row.get('close', 0) or 0
+                consecutive_up_days = row.get('consecutive_up_days', 0) or 0
+                change_3d = row.get('change_3d', 0) or 0
+                change_5d = row.get('change_5d', 0) or 0
+                change_pct = row.get('change_pct', 0) or 0
+                
+                print(f"{code:<10} {close:<10.2f} {consecutive_up_days:<8} "
+                      f"{change_3d:<12.2f}% {change_5d:<12.2f}% {change_pct:<10.2f}%")
+        else:
+            result = pl.DataFrame()
+            print(f"😢 没有符合条件的股票")
+            return result
         
         return result
 
     def _get_last_trade_date(self, today: str = None) -> str:
-        """获取最后一个交易日（今天或之前的最近交易日）"""
+        """获取最后一个交易日
+        
+        逻辑：
+        1. 如果今天是交易日
+           - 如果当前时间在15:00以后，使用今天的数据
+           - 如果当前时间在15:00之前，使用上一个交易日的数据
+        2. 如果今天不是交易日，使用上一个交易日的数据
+        """
+        from datetime import datetime, time
+        
         if today is None:
             today = date.today().strftime("%Y%m%d")
+        
         all_dates = self.calendar.df["trade_date"].tolist()
-        for d in reversed(all_dates):
-            if d <= today:
-                return d
-        return all_dates[0] if all_dates else today
+        today_int = int(today)
+        
+        # 检查今天是否是交易日
+        is_today_trading_day = today_int in all_dates
+        
+        # 获取当前时间
+        current_time = datetime.now().time()
+        # 检查是否在15:00以后
+        is_after_1500 = current_time >= time(15, 0)
+        
+        if is_today_trading_day and is_after_1500:
+            # 今天是交易日且已收盘，使用今天的数据
+            return today
+        else:
+            # 今天不是交易日或未收盘，使用上一个交易日的数据
+            past_dates = [d for d in all_dates if d < today_int]
+            if past_dates:
+                return str(max(past_dates))
+            return str(all_dates[0]) if all_dates else today
 
 
 def main():
@@ -120,7 +149,7 @@ def main():
     if len(sys.argv) > 1:
         config = sys.argv[1]
     else:
-        config = "4|2,5,10,8,15"
+        config = "3|3,10,15|-15,5,7,6"  # 默认配置
     
     picker = StockPicker(config)
     picker.pick()
