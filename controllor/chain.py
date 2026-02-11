@@ -307,11 +307,14 @@ class Chain:
             # 直接调用处理方法
             self._process_strategy_group(strategy_groups[0], 0)
         else:
-            # 多进程时创建进程
-            print(f"多进程模式，创建进程数: {self.processor_count}")
+            # 多进程时，主进程处理第一组，其余由子进程处理
+            print(f"多进程模式，主进程处理一组，创建 {self.processor_count - 1} 个子进程")
             
-            # 创建并启动进程
-            for i, group in enumerate(strategy_groups):
+            
+            
+            # 创建并启动子进程处理剩余组
+            for i in range(1, self.processor_count):
+                group = strategy_groups[i]
                 process_name = f"ChainProcess-{i}"
                 process = multiprocessing.Process(
                     target=self._process_strategy_group,
@@ -321,11 +324,12 @@ class Chain:
                 processes.append(process)
                 process.start()
                 print(f"启动进程: {process_name}，处理策略数: {len(group)}")
-        
-        # 等待所有进程完成
-        for i, process in enumerate(processes):
+        # 主进程处理第一组
+            self._process_strategy_group(strategy_groups[0], 0)
+        # 等待所有子进程完成
+        for i, process in enumerate[Any](processes):
             process.join()
-            print(f"进程 {i} ({process.name}) 处理完成")
+            print(f"进程 {i+1} ({process.name}) 处理完成")
         
         # 所有策略执行完成后，合并所有进程的缓存
         self._merge_thread_caches()

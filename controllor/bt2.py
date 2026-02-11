@@ -25,19 +25,20 @@ def bt_all(processor_count,fail_count,strategy_params=None,max_strategy_count=10
         strategy_params_list=str2dict(strategy_params)
     else:
         for a in range(2,5,1): # 持仓数量
-            for buy1 in range(1,4,1): # 连涨天数
-                for buy2 in range(5,15,5): # 3日涨幅最低
-                    for buy3 in range(5,20,5): # 5日涨幅最低
-                        for sell1 in range(-15,-4,2): # 止损率（负数，如-5表示-5%）
-                            for sell2 in range(1,6,1): # 持仓天数
-                                for sell3 in range(5,21,1): # 目标涨幅
-                                    for sell4 in range(3,15,1): # 移动止盈回撤率
-                                        strategy_params_list.append({
-                                            "base_param_arr": [10000000, a],
-                                            "buy_param_arr": [buy1, buy2, buy3],
-                                            "sell_param_arr": [sell1, sell2, sell3, sell4],
-                                            "debug": 0
-                                        })
+            for buy1 in range(1,5,1): # 连涨天数
+                for buy2 in range(3,15,1): # 3日涨幅最低
+                    for buy3 in range(3,20,1): # 5日涨幅最低
+                        # for sell1 in range(-15,-4,2): # 止损率（负数，如-5表示-5%）
+                        #     for sell2 in range(1,6,1): # 持仓天数
+                        #         for sell3 in range(5,21,1): # 目标涨幅
+                        #             for sell4 in range(3,15,1): # 移动止盈回撤率
+                        strategy_params_list.append({
+                            "base_param_arr": [10000000, a],
+                            "buy_param_arr": [buy1, buy2, buy3],
+                            # "sell_param_arr": [sell1, sell2, sell3, sell4],
+                            "sell_param_arr": [-15, 2, 8, 3],
+                            "debug": 0
+                        })
     strategy_params_list=strategy_params_list[:max_strategy_count]
     print(f"策略参数数量: {len(strategy_params_list)}")
     # 随机打散
@@ -83,7 +84,7 @@ if __name__ == "__main__":
     3|2,10,15|-15,2,8,3
     """
 
-    bt_all(processor_count=1,fail_count=2,strategy_params=None,max_strategy_count=1000000000)
+    bt_all(processor_count=4,fail_count=2,strategy_params=None,max_strategy_count=1000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
