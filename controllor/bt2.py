@@ -13,13 +13,13 @@ def bt_all(processor_count,fail_count,strategy_params=None):
     else:
         for a in range(2,5,1): # 持仓数量
             for buy1 in range(1,4,1): # 连涨天数
-                for buy2 in range(5,10,5): # 3日涨幅最低
-                    for buy3 in range(5,15,5): # 5日涨幅最低
-                        for sell1 in range(-15,-4,5): # 止损率（负数，如-5表示-5%）
-                            for sell2 in range(1,4,1): # 持仓天数
-                                for sell3 in range(5,21,5): # 目标涨幅
-                                    for sell4 in range(1,20,2): # 最低盈利阈值
-                                        for sell5 in range(3,15,3): # 移动止盈回撤率
+                for buy2 in range(5,15,5): # 3日涨幅最低
+                    for buy3 in range(5,20,5): # 5日涨幅最低
+                        for sell1 in range(-15,-4,2): # 止损率（负数，如-5表示-5%）
+                            for sell2 in range(1,6,1): # 持仓天数
+                                for sell3 in range(5,21,1): # 目标涨幅
+                                    for sell4 in range(1,20,5): # 最低盈利阈值
+                                        for sell5 in range(3,15,1): # 移动止盈回撤率
                                             strategy_params_list.append({
                                                 "base_param_arr": [10000000, a],
                                                 "buy_param_arr": [buy1, buy2, buy3],
@@ -72,8 +72,8 @@ if __name__ == "__main__":
     5|3,5,10|-5,3,10,5,5
     """
 
-    # bt_all(1,4)
+    bt_all(4,1)
     # bt_all(1,4,s)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
-    bt_one(s,[[20250101,20260101]])
+    # bt_one(s,[[20250101,20260101]])

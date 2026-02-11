@@ -43,6 +43,8 @@ class StockData:
                 # 计算涨跌幅和下一天开盘价
                 ((pl.col("close") - pl.col("close").shift(1)) / pl.col("close").shift(1) * 100).round(2).fill_null(0).cast(pl.Float32).alias("change_pct"),
                 pl.col("open").shift(-1).alias("next_open"),
+                # 计算成交金额
+                (pl.col("volume") * (pl.col("open") + pl.col("close")) / 2).cast(pl.Int64).alias("amount"),
                 # 计算成交量的MA5和MA10
                 pl.col("volume").rolling_mean(window_size=5).cast(pl.Int32).alias("ma5_vol"),
                 pl.col("volume").rolling_mean(window_size=10).cast(pl.Int32).alias("ma10_vol")
@@ -85,7 +87,7 @@ class StockData:
             if group is None or group.is_empty():
                 continue
             # 按volume_rank 从低到高排序，表示成交量排名靠前
-            group=group.sort("volume_rank" ,descending=False)
+            group=group.sort("amount" ,descending=True)
             date_dict[trade_date] = group
         return date_dict
     
