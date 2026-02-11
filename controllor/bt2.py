@@ -1,7 +1,21 @@
 from stock_calendar import StockCalendar as sc
 from chain import Chain
 import random
-def bt_all(processor_count,fail_count,strategy_params=None):
+
+# """
+#     3|2,10,15|-15,2,8,3
+#     时间周期: 20250101 至 20260101
+#     时间周期: 20250101 至 20260101
+#     资金: 100000.00 - > 314042.00
+#     总收益率: 214.04%
+#     胜率: 44.64%
+#     交易次数: 336
+#     最大资金: 314232.00
+#     最小资金: 91406.00
+#     夏普比率: 2.87
+#     平均资金使用率: 53.00%
+# """
+def bt_all(processor_count,fail_count,strategy_params=None,max_strategy_count=1000000000):
     day_array=sc().get_date_arr()
     result_file=f"all_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-最多失败{fail_count}"
     # 定义策略参数字典列表（不创建对象，省内存）
@@ -24,7 +38,7 @@ def bt_all(processor_count,fail_count,strategy_params=None):
                                             "sell_param_arr": [sell1, sell2, sell3, sell4],
                                             "debug": 0
                                         })
-    # strategy_params_list=strategy_params_list[:1]
+    strategy_params_list=strategy_params_list[:max_strategy_count]
     print(f"策略参数数量: {len(strategy_params_list)}")
     # 随机打散
     random.shuffle(strategy_params_list)
@@ -65,13 +79,12 @@ def bt_one(strategy_params,day_array):
 
 
 if __name__ == "__main__":
-    
     s="""
-    3|2,10,15|-5,2,8,5
+    3|2,10,15|-15,2,8,3
     """
 
-    # bt_all(4,2)
-    # bt_all(1,4,s)
+    bt_all(processor_count=1,fail_count=2,strategy_params=None,max_strategy_count=1000000000)
+    # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
-    bt_one(s,[[20250101,20260101]])
+    # bt_one(s,[[20250101,20260101]])

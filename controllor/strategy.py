@@ -105,7 +105,15 @@ class Strategy:
         today_stock_df = self.data.get_data_by_date(today)
         
         # 检查数据是否为空
-        if today_stock_df.is_empty():
+        if today_stock_df is None or today_stock_df.is_empty():
+            self.picked_data = pl.DataFrame()
+            if self.debug:
+                print(f"日期 {today} 无符合条件股票")
+            return pl.DataFrame()
+        
+        # 缓存数据长度
+        df_length = len(today_stock_df)
+        if df_length == 0:
             self.picked_data = pl.DataFrame()
             if self.debug:
                 print(f"日期 {today} 无符合条件股票")
@@ -118,7 +126,8 @@ class Strategy:
         filtered_stocks = today_stock_df.filter(mask)
         
         # 检查筛选结果是否为空
-        if filtered_stocks.is_empty():
+        filtered_length = len(filtered_stocks)
+        if filtered_length == 0:
             self.picked_data = pl.DataFrame()
             if self.debug:
                 print(f"日期 {today} 无符合条件股票")
@@ -132,8 +141,9 @@ class Strategy:
         
         # 调试信息
         if self.debug:
-            print(f"日期 {today} 选出股票 {len(filtered_stocks)} 只")
-            print(f"前5只 {result.head(5)}")
+            print(f"日期 {today} 选出股票 {filtered_length} 只")
+            if filtered_length > 0:
+                print(f"前5只 {result.head(5)}")
         
         return result
     
@@ -194,7 +204,8 @@ class Strategy:
         is_debug=self.debug
         """执行卖出操作"""
         hold = self.hold
-        if not hold:
+        hold_length = len(hold)
+        if hold_length == 0:
             return
         
         today = self.today
@@ -202,9 +213,11 @@ class Strategy:
         self._ensure_today_data_loaded()
         data_cache = self._today_data_cache
         sell_chain_list = getattr(self, 'sell_chain_list', [])
+        sell_chain_length = len(sell_chain_list)
         
         sells_info: list[tuple[int, int, str]] = []
-        for hold_stock in hold:
+        for i in range(hold_length):
+            hold_stock = hold[i]
             code = hold_stock.code
             buy_day = hold_stock.buy_day
             if buy_day == today:
@@ -212,11 +225,7 @@ class Strategy:
             
             stock_data = data_cache.get(code)
             # 检查数据是否为空或无效
-            is_empty = False
-            if stock_data is None:
-                is_empty = True
-            elif hasattr(stock_data, 'is_empty'):
-                is_empty = stock_data.is_empty()
+            is_empty = stock_data is None or (hasattr(stock_data, 'is_empty') and stock_data.is_empty())
             
             if is_empty:
                 if is_debug:
@@ -225,7 +234,10 @@ class Strategy:
             
             # 策略决定判断是否要卖掉这个票
             need_sell, sell_price, reason = False, 0, ""
-            for sell_strategy in sell_chain_list:
+            buy_price = hold_stock.buy_price
+            
+            for j in range(sell_chain_length):
+                sell_strategy = sell_chain_list[j]
                 sell_name = sell_strategy.name
                 params = sell_strategy.params
                 # 使用类属性策略映射查找方法名
@@ -238,7 +250,7 @@ class Strategy:
                 need_sell, sell_price, reason = strategy_func(hold_stock, stock_data, params)
                 # 设置颜色
                 if is_debug:
-                    reason = f"\033[91m{reason}\033[0m" if sell_price > hold_stock.buy_price else f"\033[92m{reason}\033[0m"
+                    reason = f"\033[91m{reason}\033[0m" if sell_price > buy_price else f"\033[92m{reason}\033[0m"
                 # 如果某个策略触发卖出，则不再检查其他策略
                 if need_sell:
                     break
@@ -246,12 +258,14 @@ class Strategy:
             if need_sell:
                 sells_info.append((code, sell_price, reason))
         
-        if not sells_info:
+        sells_info_length = len(sells_info)
+        if sells_info_length == 0:
             return
         
         # 批量处理卖出
         trades_history = self.trades_history
-        for code, sell_price, sell_reason in sells_info:
+        for i in range(sells_info_length):
+            code, sell_price, sell_reason = sells_info[i]
             hold_stock = self._remove_hold(code)
             if hold_stock:
                 buy_price = hold_stock.buy_price

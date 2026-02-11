@@ -14,24 +14,18 @@ class UpStrategy(Strategy):
         buy_day5_min = self.buy_param_arr[2]
         
         def filter_func(df: pl.DataFrame) -> pl.Series:
-            # return (
-            #     # 新增条件：ma_up为1
-            #     (df["ma_vol_up"] == 1)
-            #     & (df["has_limit_up_20d"] == 1)
-            #     & (df["consecutive_up_days"] >= buy_up_day_min)
-            #     & (df["change_3d"] >= buy_day3_min)
-            #     & (df["change_5d"] >= buy_day5_min)
-            #     & (df["change_pct"] >= 3)
-            #     & (df["change_pct"] <= 5)
-            # )
+            # 使用列缓存减少重复访问
+            consecutive_up_days = df["consecutive_up_days"]
+            change_3d = df["change_3d"]
+            change_5d = df["change_5d"]
+            change_pct = df["change_pct"]
+            
+            # 应用筛选条件
             return (
-                    # 新增条件：ma_up为1
-                    # (df["has_limit_up_and_vol_up_3_5"] == 1)
-                    # &
-                      (df["consecutive_up_days"] >= buy_up_day_min)
-                    & (df["change_3d"] > buy_day3_min)
-                    & (df["change_5d"] > buy_day5_min)
-                    & (df["change_pct"] <5)
+                      (consecutive_up_days >= buy_up_day_min)
+                    & (change_3d > buy_day3_min)
+                    & (change_5d > buy_day5_min)
+                    & (change_pct < 5)
                 )
         self._pick_filter = filter_func
     
