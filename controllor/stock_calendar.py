@@ -99,6 +99,28 @@ class StockCalendar:
         return None
 
     
+    def get_last_trade_date(self) -> int:
+        """获取最后一个交易日
+        如果今天是交易日且已过15:00，返回今天
+        否则返回上一个交易日
+        """
+        from datetime import datetime
+        now = datetime.now()
+        today_int = int(now.strftime("%Y%m%d"))
+
+        if today_int in self.date_to_index:
+            if now.hour >= 15:
+                return today_int
+            idx = self.date_to_index[today_int]
+            if idx > 0:
+                return self.df.iloc[idx - 1]["trade_date"]
+        else:
+            for i in range(len(self.df) - 1, -1, -1):
+                date_val = self.df.iloc[i]["trade_date"]
+                if date_val < today_int:
+                    return date_val
+        return today_int
+
     def get_date_arr(self)->list:
         return [
             [20240701,20240801]

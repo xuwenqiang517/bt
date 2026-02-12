@@ -5,25 +5,21 @@ import numpy as np
 import polars as pl
 from tqdm import tqdm
 import requests
+from stock_calendar import StockCalendar as sc
 # pl 显示所有表头
 pl.Config.set_tbl_cols(100)
 # pl 显示所有列
 pl.Config.set_tbl_rows(10)
 
 class StockData:
-    def __init__(self):
-        #缓存
-        self.use_all_cache=1
 
-        from datetime import timedelta
-        today=date.today().strftime("%Y%m%d")
-        if datetime.now().hour < 15:
-            today=(date.today()-timedelta(days=1)).strftime("%Y%m%d")
+    def __init__(self, force_refresh=False):
+        today = sc().get_last_trade_date()
         cache=lc()
         print(f"1. 获取股票列表")
-        stock_list_df=self.get_stock_list(today,cache)
+        stock_list_df=self.get_stock_list(str(today),cache)
         print(f"2. 获取股票数据")
-        stock_data_df=self.get_stock_data_pl(stock_list_df,today,cache)
+        stock_data_df=self.get_stock_data_pl(stock_list_df,str(today),cache,force_refresh)
         print(f"3. 计算技术指标")
         # 按code分组并应用calc_tech_pl
         grouped = stock_data_df.group_by("code")
@@ -38,16 +34,8 @@ class StockData:
         print(f"4. 构建数据索引")
         self.date_df_dict=self.convert(processed_stock_data_df)
         print(f"5. 构建快速查找索引")
-        # 构建2级dict索引，用于O(1)复杂度的频繁查找
-        self.date_code_dict = {}
-        for trade_date, group in self.date_df_dict.items():
-            code_dict = {}
-            for row in group.iter_rows(named=True):
-                code = row["code"]
-                # 提取open, close, high, low值作为tuple
-                price_tuple = (row["open"], row["close"], row["high"], row["low"])
-                code_dict[code] = price_tuple
-            self.date_code_dict[trade_date] = code_dict
+        # 统一数据结构：2层 NumPy 结构，支持批量筛选和O(1)精确查询
+        # self.date_numpy_dict = {today: {field: np.array, '_code_to_idx': {code: idx}}}
 
     # 选票过滤
 
@@ -68,7 +56,14 @@ class StockData:
                 # pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("volume_rank"),
                 # 涨跌幅是float32，直接计算
                 pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d"),
-                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d")
+                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d"),
+                # 计算价格限制状态：0=正常，1=涨停，2=跌停
+                pl.when(pl.col("open").shift(-1) >= pl.col("close") * 1.095)
+                .then(pl.lit(1))
+                .when(pl.col("open") <= pl.col("close").shift(1) * 0.905)
+                .then(pl.lit(2))
+                .otherwise(pl.lit(0))
+                .cast(pl.Int8).alias("price_limit_status")
             ]).with_columns([
                 pl.Series(
                     name="consecutive_up_days",
@@ -90,43 +85,58 @@ class StockData:
         
         return df_tech
 
-    def convert(self,stock_data_df)->dict[int,pl.DataFrame]:
-        # 按日期构建索引，key为日期，值为该日期的所有股票数据df，性能要最好
+    def convert(self, stock_data_df) -> dict[int, pl.DataFrame]:
+        # 按日期构建索引，统一为2层NumPy结构
         date_dict = {}
         self.date_numpy_dict = {}
         grouped = stock_data_df.group_by("date")
         for trade_date, group in grouped:
-            # 确保trade_date是整数而不是元组
             if isinstance(trade_date, tuple):
                 trade_date = trade_date[0]
             if group is None or group.is_empty():
                 continue
-            # 按成交额从高到低排序，表示当天成交活跃的股票靠前
-            group=group.sort("amount" ,descending=True)
+            group = group.sort("amount", descending=True)
             date_dict[trade_date] = group
-            # 同时生成 NumPy 数组版本，用于高性能筛选
+
+            # 统一数据结构：NumPy数组 + code到索引的映射
+            codes = group['code'].to_numpy()
             self.date_numpy_dict[trade_date] = {
-                'code': group['code'].to_numpy(),
+                'code': codes,
+                'open': group['open'].to_numpy(),
+                'close': group['close'].to_numpy(),
+                'high': group['high'].to_numpy(),
+                'low': group['low'].to_numpy(),
+                'volume': group['volume'].to_numpy(),
                 'next_open': group['next_open'].to_numpy(),
+                'price_limit_status': group['price_limit_status'].to_numpy(),
                 'consecutive_up_days': group['consecutive_up_days'].to_numpy(),
                 'change_3d': group['change_3d'].to_numpy(),
                 'change_5d': group['change_5d'].to_numpy(),
                 'change_pct': group['change_pct'].to_numpy(),
+                'amount': group['amount'].to_numpy(),
+                '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
             }
         return date_dict
 
     def get_numpy_data_by_date(self, today: int) -> dict:
-        if today in self.date_numpy_dict:
-            return self.date_numpy_dict[today]
-        return None
-    
-    def get_data_by_date_code(self,today: int,code: int)->tuple:
-        if today in self.date_code_dict:
-            code_dict = self.date_code_dict[today]
-            if code in code_dict:
-                return code_dict[code]
-        # print(f"没有找到日期 {today} 股票 {code} 的数据")
-        return None
+        """获取当天所有股票的NumPy数据（用于批量筛选）"""
+        return self.date_numpy_dict.get(today)
+
+    def get_data_by_date_code(self, today: int, code: int) -> dict | None:
+        """精确查询某只股票的数据，O(1)复杂度"""
+        day_data = self.date_numpy_dict.get(today)
+        if day_data is None:
+            return None
+        idx = day_data['_code_to_idx'].get(code)
+        if idx is None:
+            return None
+        return {
+            'open': day_data['open'][idx],
+            'close': day_data['close'][idx],
+            'high': day_data['high'][idx],
+            'low': day_data['low'][idx],
+            'price_limit_status': day_data['price_limit_status'][idx]
+        }
 
 
     
@@ -175,11 +185,11 @@ class StockData:
         return stock_list
 
 
-    def get_stock_data_pl(self,stock_list,today,cache):
-        all_cache_file_name="all_stock_data_"+today+"_pl"
+    def get_stock_data_pl(self,stock_list,today,cache,force_refresh=False):
+        all_cache_file_name=f"all_stock_data_{today}_pl"
         cache.clean(prefix="all_stock_data_",ignore=[all_cache_file_name])
         stock_data = None
-        if self.use_all_cache:
+        if not force_refresh:
             stock_data = cache.get_pl(all_cache_file_name)
         if stock_data is None:
             print(f"缓存取股票数据 {all_cache_file_name} 失败，尝试从_tx获取")
@@ -222,7 +232,7 @@ class StockData:
 
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        cache.clean(prefix="stock_data_")
+        # cache.clean(prefix="stock_data_")
         return stock_data
 
 
@@ -259,7 +269,7 @@ class StockData:
 if __name__ == "__main__":
     sd=StockData()
     print("测试按日期获取数据")
-    print(sd.get_data_by_date(20250707))
+    print(sd.get_numpy_data_by_date(20250707))
     print("测试按日期和代码获取数据")
     print(sd.get_data_by_date_code(20250102,721))
 

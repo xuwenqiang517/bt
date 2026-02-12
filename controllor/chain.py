@@ -20,7 +20,8 @@ class Chain:
         self.win_rate_threshold = param.get("win_rate_threshold", 0.99)  # 胜率阈值，默认65%
         self.processor_count = param.get("processor_count", 1)  # 进程数，默认1
         self.fail_count = param.get("fail_count", 1)  # 允许失败次数，默认1
-        
+        self.force_refresh = param.get("force_refresh", False)  # 是否强制刷新数据缓存
+
         self.param = param  # 原始参数
         self.result_file = param.get("result_file", None)  # 结果文件
 
@@ -100,7 +101,7 @@ class Chain:
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
         
         # 在子进程中初始化 stock_data 和 calendar
-        stock_data = sd()
+        stock_data = sd(force_refresh=self.force_refresh)
         calendar = sc()
         is_debug=self.chain_debug
         
@@ -113,7 +114,7 @@ class Chain:
         total_count = len(self.date_arr)
         count=0
         # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰，设置最小更新间隔减少输出频率
-        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True, mininterval=5):
+        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True, mininterval=1):
             count+=1
             strategy = UpStrategy(**params)
             results = []
@@ -133,7 +134,7 @@ class Chain:
                 results.append(result)
 
             if failure_count>fail_count and not is_debug:
-                # print(f"进程 {thread_id}: 策略 {params} 失败次数 {failure_count}")
+                # print(f"[DEBUG] 策略被跳过: failure_count={failure_count}, fail_count={fail_count}, is_debug={is_debug}")
                 continue
 
             successful_count=total_count-failure_count

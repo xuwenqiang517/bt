@@ -38,18 +38,20 @@ class Strategy:
         "时间止盈": "time_based_sell"
     }
     
-    def __init__(self, base_param_arr: list, sell_param_arr: list, buy_param_arr: list, debug: bool):
+    def __init__(self, base_param_arr: list, sell_param_arr: list, buy_param_arr: list, pick_param_arr: list, debug: bool):
         """初始化策略
-        
+
         Args:
             base_param_arr: 基础参数数组，包含初始资金和最大持仓数
             sell_param_arr: 卖出参数数组
             buy_param_arr: 买入参数数组
+            pick_param_arr: 选股排序参数数组 [排序字段, 排序方式]
             debug: 是否开启调试模式
         """
         self.base_param_arr = base_param_arr
         self.sell_param_arr = sell_param_arr
         self.buy_param_arr = buy_param_arr
+        self.pick_param_arr = pick_param_arr if pick_param_arr else [0, 1]
         self.init_amount, self.max_hold_count = base_param_arr[0], base_param_arr[1]
         self.data = None
         self.calendar = None
@@ -90,16 +92,6 @@ class Strategy:
         self.trades_history: list[dict] = []
         self.daily_values: list[dict] = []
         self.today: int | None = None
-        self._today_data_cache: dict[int, tuple] = {}
-    
-    def _ensure_today_data_loaded(self) -> None:
-        """确保当日持仓股票数据已加载"""
-        if not self.hold:
-            return
-        today = self.today
-        for hold in self.hold:
-            if hold.code not in self._today_data_cache:
-                self._today_data_cache[hold.code] = self.data.get_data_by_date_code(today, hold.code)
     
     def _add_hold(self, hold_stock: HoldStock) -> None:
         """添加持仓股票"""
@@ -118,7 +110,6 @@ class Strategy:
     def pick(self) -> None:
         """选择符合条件的股票"""
         today = self.today
-        # 获取 NumPy 数据用于高性能筛选
         numpy_data = self.data.get_numpy_data_by_date(today)
         if numpy_data is None or len(numpy_data['code']) == 0:
             self.picked_numpy_data = None
@@ -126,7 +117,6 @@ class Strategy:
                 print(f"日期 {today} 无符合条件股票")
             return
 
-        # 使用 Numba JIT 筛选
         mask = self._pick_filter(numpy_data)
         if not mask.any():
             self.picked_numpy_data = None
@@ -134,15 +124,17 @@ class Strategy:
                 print(f"日期 {today} 无符合条件股票")
             return
 
-        # 直接保存 NumPy 筛选结果，避免 DataFrame 行索引开销
-        row_indices = np.nonzero(mask)[0]
+        # 使用排序器对筛选结果排序
+        sorted_indices = self._pick_sorter(numpy_data, mask)
+
         self.picked_numpy_data = {
-            'code': numpy_data['code'][row_indices],
-            'next_open': numpy_data['next_open'][row_indices],
+            'code': numpy_data['code'][sorted_indices],
+            'next_open': numpy_data['next_open'][sorted_indices],
+            'price_limit_status': numpy_data['price_limit_status'][sorted_indices],
         }
 
         if self.debug:
-            print(f"日期 {today} 选出股票 {len(row_indices)} 只")
+            print(f"日期 {today} 选出股票 {len(sorted_indices)} 只")
     
 
     def buy(self) -> None:
@@ -166,11 +158,15 @@ class Strategy:
         # 直接使用 NumPy 数组，无需 to_numpy() 转换
         codes = numpy_data['code']
         next_opens = numpy_data['next_open']
+        price_limit_status = numpy_data['price_limit_status']
         buy_counts = buy_amount_per_stock_cents // next_opens // 100 * 100
+
+        # 过滤涨停股票（price_limit_status == 1 表示次日涨停）
+        limit_up_mask = price_limit_status != 1
 
         # 使用 Numba JIT 编译的过滤函数，避免 np.isin 开销
         hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
-        valid_mask = _filter_buy_mask(codes, buy_counts, hold_codes_arr)
+        valid_mask = _filter_buy_mask(codes, buy_counts, hold_codes_arr) & limit_up_mask
         valid_codes = codes[valid_mask]
         valid_opens = next_opens[valid_mask]
         valid_counts = buy_counts[valid_mask]
@@ -198,14 +194,11 @@ class Strategy:
         hold_length = len(hold)
         if hold_length == 0:
             return
-        
+
         today = self.today
-        # 预加载当日所有持仓股票数据（消除重复调用）
-        self._ensure_today_data_loaded()
-        data_cache = self._today_data_cache
         sell_chain_list = getattr(self, 'sell_chain_list', [])
         sell_chain_length = len(sell_chain_list)
-        
+
         sells_info: list[tuple[int, int, str]] = []
         for i in range(hold_length):
             hold_stock = hold[i]
@@ -213,14 +206,21 @@ class Strategy:
             buy_day = hold_stock.buy_day
             if buy_day == today:
                 continue
-            
-            stock_data_tuple = data_cache.get(code)
-            # 检查数据是否为空或无效
-            if stock_data_tuple is None:
+
+            stock_data_dict = self.data.get_data_by_date_code(today, code)
+            if stock_data_dict is None:
                 if is_debug:
                     print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
                 continue
-            
+
+            if stock_data_dict['price_limit_status'] == 2:
+                if is_debug:
+                    print(f"日期 {today} 股票 {code} 跌停,无法卖出")
+                continue
+
+            stock_data_tuple = (stock_data_dict['open'], stock_data_dict['close'],
+                               stock_data_dict['high'], stock_data_dict['low'])
+
             # 策略决定判断是否要卖掉这个票
             need_sell, sell_price, reason = False, 0, ""
             buy_price = hold_stock.buy_price
@@ -419,39 +419,35 @@ class Strategy:
 
     def settle_amount(self) -> None:
         """计算每日总资产并记录"""
-        # 计算每日总资产（使用缓存，避免重复获取数据）
         hold_amount = 0
         today = self.today
         hold = self.hold
-        data_cache = self._today_data_cache
         is_debug = self.debug
-        
+
         for hold_stock in hold:
             code = hold_stock.code
-            stock_data_tuple = data_cache.get(code)
-            
-            # 检查数据是否为空
-            if stock_data_tuple is None:
+            stock_data = self.data.get_data_by_date_code(today, code)
+
+            if stock_data is None:
                 if is_debug:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
-            else:
-                # 使用tuple索引访问数据 (open, close, high, low)
-                close_price = stock_data_tuple[1]
-                high_price = stock_data_tuple[2]
-                buy_price = hold_stock.buy_price
-                buy_count = hold_stock.buy_count
-                
-                if high_price > hold_stock.highest_price:
-                    # 更新最高持仓价格
-                    hold_stock.update_highest_price(high_price)
-                
-                if is_debug:
-                    profit_cents = (close_price - buy_price) * buy_count
-                    profit_rate = (close_price - buy_price) / buy_price
-                    highest_price = hold_stock.highest_price
-                    print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计: {profit_cents/100:.2f} ({profit_rate:.2%})")
-                
-                hold_amount += close_price * buy_count
+                continue
+
+            close_price = stock_data['close']
+            high_price = stock_data['high']
+            buy_price = hold_stock.buy_price
+            buy_count = hold_stock.buy_count
+
+            if high_price > hold_stock.highest_price:
+                hold_stock.update_highest_price(high_price)
+
+            if is_debug:
+                profit_cents = (close_price - buy_price) * buy_count
+                profit_rate = (close_price - buy_price) / buy_price
+                highest_price = hold_stock.highest_price
+                print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计: {profit_cents/100:.2f} ({profit_rate:.2%})")
+
+            hold_amount += close_price * buy_count
         
         free_amount = self.free_amount
         total_value = hold_amount + free_amount
@@ -496,7 +492,6 @@ class Strategy:
             )
         
         # 预加载当日持仓数据到缓存
-        self._ensure_today_data_loaded()
         data_cache = self._today_data_cache
         
         # 计算最终投资组合价值（当前持有股票价值 + 现金）
