@@ -72,7 +72,7 @@ class Strategy:
         self.trades_history: list[dict] = []
         self.daily_values: list[dict] = []
         self.today: int | None = None
-        self._today_data_cache: dict[int, pl.DataFrame] = {}
+        self._today_data_cache: dict[int, tuple] = {}
     
     def _ensure_today_data_loaded(self) -> None:
         """确保当日持仓股票数据已加载"""
@@ -223,11 +223,9 @@ class Strategy:
             if buy_day == today:
                 continue
             
-            stock_data = data_cache.get(code)
+            stock_data_tuple = data_cache.get(code)
             # 检查数据是否为空或无效
-            is_empty = stock_data is None or (hasattr(stock_data, 'is_empty') and stock_data.is_empty())
-            
-            if is_empty:
+            if stock_data_tuple is None:
                 if is_debug:
                     print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
                 continue
@@ -247,7 +245,7 @@ class Strategy:
                 # 获取对应的方法对象
                 strategy_func = getattr(self, method_name)
                 # 调用对应的策略函数
-                need_sell, sell_price, reason = strategy_func(hold_stock, stock_data, params)
+                need_sell, sell_price, reason = strategy_func(hold_stock, stock_data_tuple, params)
                 # 设置颜色
                 if is_debug:
                     reason = f"\033[91m{reason}\033[0m" if sell_price > buy_price else f"\033[92m{reason}\033[0m"
@@ -296,15 +294,15 @@ class Strategy:
                     print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {free_amount:.2f}")
                 
 
-    def stop_loss(self, hold: HoldStock, stock_data: pl.DataFrame, params: float) -> tuple[bool, int, str]:
+    def stop_loss(self, hold: HoldStock, stock_data_tuple: tuple, params: float) -> tuple[bool, int, str]:
         """
         触发固定阈值的止损卖出
         """
         #计算止损价
         stop_loss_price = int(hold.buy_price * (1 + params))
-        # 缓存常用值
-        open_price = stock_data['open'][0]
-        low_price = stock_data['low'][0]
+        # 缓存常用值 (open, close, high, low)
+        open_price = stock_data_tuple[0]
+        low_price = stock_data_tuple[3]
         is_debug=self.debug
         if open_price <= stop_loss_price:
             if is_debug:
@@ -316,15 +314,15 @@ class Strategy:
             return True, stop_loss_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
     
-    def stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame, params: float) -> tuple[bool, int, str]:
+    def stop_profit(self, hold: HoldStock, stock_data_tuple: tuple, params: float) -> tuple[bool, int, str]:
         """
         触发固定阈值的止盈卖出
         """
         #计算止盈价
         stop_profit_price = int(hold.buy_price * (1 + params))
-        # 缓存常用值
-        open_price = stock_data['open'][0]
-        high_price = stock_data['high'][0]
+        # 缓存常用值 (open, close, high, low)
+        open_price = stock_data_tuple[0]
+        high_price = stock_data_tuple[2]
         is_debug=self.debug
         if open_price >= stop_profit_price:
             if is_debug:
@@ -336,7 +334,7 @@ class Strategy:
             return True, stop_profit_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
 
-    def greedy_stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame, params: tuple) -> tuple[bool, int, str]:
+    def greedy_stop_profit(self, hold: HoldStock, stock_data_tuple: tuple, params: tuple) -> tuple[bool, int, str]:
         """
         贪婪止盈策略
         params: (days, min_return, trailing_stop_rate)
@@ -350,9 +348,9 @@ class Strategy:
         
         # 计算持仓天数
         hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        # 缓存常用值
-        close_price = stock_data['close'][0]
-        open_price = stock_data['open'][0]
+        # 缓存常用值 (open, close, high, low)
+        close_price = stock_data_tuple[1]
+        open_price = stock_data_tuple[0]
         is_debug=self.debug
         # 计算整体涨幅（基于收盘价）
         overall_return = (close_price - hold.buy_price) / hold.buy_price
@@ -373,7 +371,7 @@ class Strategy:
                 stop_profit_price = int(hold.highest_price * (1 - trailing_stop_rate / 100))
                 
                 # 获取当日最低价
-                low_price = stock_data['low'][0]
+                low_price = stock_data_tuple[3]
                 
                 # 比较开盘价和最低价与止盈价格的关系
                 if open_price <= stop_profit_price:
@@ -389,16 +387,16 @@ class Strategy:
         
         return False, 0, EMPTY_STRING
 
-    def trailing_stop_profit(self, hold: HoldStock, stock_data: pl.DataFrame | dict, params: float) -> tuple[bool, int, str]:
+    def trailing_stop_profit(self, hold: HoldStock, stock_data_tuple: tuple, params: float) -> tuple[bool, int, str]:
         """
         移动止盈策略：从最高持仓价格回撤指定百分比后卖出
         """
         # 计算止盈价（最高价格 * (1 - 回撤率)）
         trailing_stop_price = int(hold.highest_price * (1 - params))
         
-        # 缓存常用值
-        open_price = stock_data['open'][0]
-        low_price = stock_data['low'][0]
+        # 缓存常用值 (open, close, high, low)
+        open_price = stock_data_tuple[0]
+        low_price = stock_data_tuple[3]
         is_debug=self.debug
         if open_price <= trailing_stop_price:
             if is_debug:
@@ -411,15 +409,15 @@ class Strategy:
         
         return False, 0, EMPTY_STRING
 
-    def time_based_sell(self, hold: HoldStock, stock_data: pl.DataFrame, params: int) -> tuple[bool, int, str]:
+    def time_based_sell(self, hold: HoldStock, stock_data_tuple: tuple, params: int) -> tuple[bool, int, str]:
         """
         时间止盈策略：持有指定天数后卖出
         params: 持有天数
         """
         # 计算持仓天数
         hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        # 缓存常用值
-        open_price = stock_data['open'][0]
+        # 缓存常用值 (open, close, high, low)
+        open_price = stock_data_tuple[0]
         is_debug=self.debug
         # 如果持仓天数达到指定天数，以开盘价卖出
         if hold_days >= params:
@@ -439,21 +437,16 @@ class Strategy:
         
         for hold_stock in hold:
             code = hold_stock.code
-            stock_data = data_cache.get(code)
+            stock_data_tuple = data_cache.get(code)
             
-            # 检查数据是否为空或无效
-            is_empty = False
-            if stock_data is None:
-                is_empty = True
-            elif hasattr(stock_data, 'is_empty'):
-                is_empty = stock_data.is_empty()
-            
-            if is_empty:
+            # 检查数据是否为空
+            if stock_data_tuple is None:
                 if is_debug:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
             else:
-                close_price = stock_data['close'][0]
-                high_price = stock_data['high'][0]
+                # 使用tuple索引访问数据 (open, close, high, low)
+                close_price = stock_data_tuple[1]
+                high_price = stock_data_tuple[2]
                 buy_price = hold_stock.buy_price
                 buy_count = hold_stock.buy_count
                 
@@ -521,17 +514,12 @@ class Strategy:
             code = hold_stock.code
             stock_data = data_cache.get(code)
             # 检查数据是否为空或无效
-            is_empty = False
             if stock_data is None:
-                is_empty = True
-            elif hasattr(stock_data, 'is_empty'):
-                is_empty = stock_data.is_empty()
-            
-            if is_empty:
                 # 如果今天没有数据，使用买入价格作为估值
                 final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
             else:
-                final_holdings_value += stock_data['close'][0] * hold_stock.buy_count
+                # stock_data 现在是 tuple: (open, close, high, low)
+                final_holdings_value += stock_data[1] * hold_stock.buy_count
         
         # 最终总价值（分）
         free_amount = self.free_amount

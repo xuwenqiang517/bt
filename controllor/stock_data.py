@@ -37,6 +37,17 @@ class StockData:
         processed_stock_data_df = pl.concat(processed_dfs)
         print(f"4. 构建数据索引")
         self.date_df_dict=self.convert(processed_stock_data_df)
+        print(f"5. 构建快速查找索引")
+        # 构建2级dict索引，用于O(1)复杂度的频繁查找
+        self.date_code_dict = {}
+        for trade_date, group in self.date_df_dict.items():
+            code_dict = {}
+            for row in group.iter_rows(named=True):
+                code = row["code"]
+                # 提取open, close, high, low值作为tuple
+                price_tuple = (row["open"], row["close"], row["high"], row["low"])
+                code_dict[code] = price_tuple
+            self.date_code_dict[trade_date] = code_dict
 
     # 选票过滤
 
@@ -102,14 +113,13 @@ class StockData:
         else:
             # print(f"没有找到日期 {today} 的股票数据")
             return None
-    def get_data_by_date_code(self,today: int,code: int)->pl.DataFrame:
-        if today in self.date_df_dict:
-            df = self.date_df_dict[today]
-            filtered_df = df.filter(pl.col("code") == code)
-            return filtered_df
-        else:
-            # print(f"没有找到日期 {today} 的股票数据")
-            return None
+    def get_data_by_date_code(self,today: int,code: int)->tuple:
+        if today in self.date_code_dict:
+            code_dict = self.date_code_dict[today]
+            if code in code_dict:
+                return code_dict[code]
+        # print(f"没有找到日期 {today} 股票 {code} 的数据")
+        return None
 
 
     
