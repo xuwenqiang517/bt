@@ -1,32 +1,43 @@
 import polars as pl
+import numpy as np
+from numba import njit, int8, int32, float32, boolean
 
 from dto import *
 from strategy import Strategy
+
+@njit(cache=True, parallel=True)
+def _filter_numba(up_days, change_3d, change_5d, change_pct,
+                  buy_up_day_min, buy_day3_min, buy_day5_min):
+    """Numba JIT 编译的筛选函数，并行执行"""
+    n = len(up_days)
+    result = np.empty(n, dtype=np.bool_)
+    for i in range(n):
+        result[i] = (up_days[i] >= buy_up_day_min and
+                     change_3d[i] > buy_day3_min and
+                     change_5d[i] > buy_day5_min and
+                     change_pct[i] < 5)
+    return result
 
 class UpStrategy(Strategy):
     def __init__(self, base_param_arr, sell_param_arr, buy_param_arr, debug):
         super().__init__(base_param_arr, sell_param_arr, buy_param_arr, debug)
         self.sell_chain_list = self.init_sell_strategy_chain()
-        
+
     def _init_pick_filter(self):
         buy_up_day_min = self.buy_param_arr[0]
         buy_day3_min = self.buy_param_arr[1]
         buy_day5_min = self.buy_param_arr[2]
-        
-        def filter_func(df: pl.DataFrame) -> pl.Series:
-            # 使用列缓存减少重复访问
-            consecutive_up_days = df["consecutive_up_days"]
-            change_3d = df["change_3d"]
-            change_5d = df["change_5d"]
-            change_pct = df["change_pct"]
-            
-            # 应用筛选条件
-            return (
-                      (consecutive_up_days >= buy_up_day_min)
-                    & (change_3d > buy_day3_min)
-                    & (change_5d > buy_day5_min)
-                    & (change_pct < 5)
-                )
+
+        def filter_func(numpy_data: dict):
+            # 使用 Numba JIT 编译的筛选函数
+            mask = _filter_numba(
+                numpy_data['consecutive_up_days'],
+                numpy_data['change_3d'],
+                numpy_data['change_5d'],
+                numpy_data['change_pct'],
+                buy_up_day_min, buy_day3_min, buy_day5_min
+            )
+            return mask
         self._pick_filter = filter_func
     
     # def _init_pick_sorter(self):

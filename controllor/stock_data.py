@@ -93,6 +93,7 @@ class StockData:
     def convert(self,stock_data_df)->dict[int,pl.DataFrame]:
         # 按日期构建索引，key为日期，值为该日期的所有股票数据df，性能要最好
         date_dict = {}
+        self.date_numpy_dict = {}
         grouped = stock_data_df.group_by("date")
         for trade_date, group in grouped:
             # 确保trade_date是整数而不是元组
@@ -103,16 +104,22 @@ class StockData:
             # 按成交额从高到低排序，表示当天成交活跃的股票靠前
             group=group.sort("amount" ,descending=True)
             date_dict[trade_date] = group
+            # 同时生成 NumPy 数组版本，用于高性能筛选
+            self.date_numpy_dict[trade_date] = {
+                'code': group['code'].to_numpy(),
+                'next_open': group['next_open'].to_numpy(),
+                'consecutive_up_days': group['consecutive_up_days'].to_numpy(),
+                'change_3d': group['change_3d'].to_numpy(),
+                'change_5d': group['change_5d'].to_numpy(),
+                'change_pct': group['change_pct'].to_numpy(),
+            }
         return date_dict
+
+    def get_numpy_data_by_date(self, today: int) -> dict:
+        if today in self.date_numpy_dict:
+            return self.date_numpy_dict[today]
+        return None
     
-    def get_data_by_date(self,today: int)->pl.DataFrame:
-        if today in self.date_df_dict:
-            df = self.date_df_dict[today]
-            # 继续以整数形式返回数据
-            return df
-        else:
-            # print(f"没有找到日期 {today} 的股票数据")
-            return None
     def get_data_by_date_code(self,today: int,code: int)->tuple:
         if today in self.date_code_dict:
             code_dict = self.date_code_dict[today]

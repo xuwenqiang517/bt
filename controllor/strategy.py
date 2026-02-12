@@ -2,8 +2,26 @@ import sys
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
 import polars as pl
+import numpy as np
+from numba import njit
 
 from dto import *
+
+@njit(cache=True)
+def _filter_buy_mask(codes, buy_counts, hold_codes_arr):
+    """Numba JIT 编译的买入过滤函数"""
+    n = len(codes)
+    result = np.empty(n, dtype=np.bool_)
+    for i in range(n):
+        # buy_counts > 0 且 code 不在 hold_codes 中
+        result[i] = (buy_counts[i] > 0)
+        if result[i]:
+            # 检查是否在持仓中
+            for j in range(len(hold_codes_arr)):
+                if codes[i] == hold_codes_arr[j]:
+                    result[i] = False
+                    break
+    return result
 
 # 全局常量
 EMPTY_STRING = ""
@@ -68,7 +86,7 @@ class Strategy:
         self.free_amount = self.init_amount
         self.hold: list[HoldStock] = []
         self.hold_codes: set[int] = set()
-        self.picked_data: pl.DataFrame | None = None
+        self.picked_numpy_data: dict | None = None
         self.trades_history: list[dict] = []
         self.daily_values: list[dict] = []
         self.today: int | None = None
@@ -97,104 +115,77 @@ class Strategy:
                 return hold
         return None
     
-    def pick(self) -> pl.DataFrame: 
+    def pick(self) -> None:
         """选择符合条件的股票"""
         today = self.today
-        
-        # 获取当日股票数据（返回类型为 pl.DataFrame）
-        today_stock_df = self.data.get_data_by_date(today)
-        
-        # 检查数据是否为空
-        if today_stock_df is None or today_stock_df.is_empty():
-            self.picked_data = pl.DataFrame()
+        # 获取 NumPy 数据用于高性能筛选
+        numpy_data = self.data.get_numpy_data_by_date(today)
+        if numpy_data is None or len(numpy_data['code']) == 0:
+            self.picked_numpy_data = None
             if self.debug:
                 print(f"日期 {today} 无符合条件股票")
-            return pl.DataFrame()
-        
-        # 缓存数据长度
-        df_length = len(today_stock_df)
-        if df_length == 0:
-            self.picked_data = pl.DataFrame()
+            return
+
+        # 使用 Numba JIT 筛选
+        mask = self._pick_filter(numpy_data)
+        if not mask.any():
+            self.picked_numpy_data = None
             if self.debug:
                 print(f"日期 {today} 无符合条件股票")
-            return pl.DataFrame()
-        
-        # 应用筛选函数生成掩码
-        mask = self._pick_filter(today_stock_df)
-        
-        # 根据掩码筛选股票
-        filtered_stocks = today_stock_df.filter(mask)
-        
-        # 检查筛选结果是否为空
-        filtered_length = len(filtered_stocks)
-        if filtered_length == 0:
-            self.picked_data = pl.DataFrame()
-            if self.debug:
-                print(f"日期 {today} 无符合条件股票")
-            return pl.DataFrame()
-        
-        # 应用排序函数对筛选结果进行排序
-        result = self._pick_sorter(filtered_stocks)
-        
-        # 记录筛选结果
-        self.picked_data = filtered_stocks
-        
-        # 调试信息
+            return
+
+        # 直接保存 NumPy 筛选结果，避免 DataFrame 行索引开销
+        row_indices = np.nonzero(mask)[0]
+        self.picked_numpy_data = {
+            'code': numpy_data['code'][row_indices],
+            'next_open': numpy_data['next_open'][row_indices],
+        }
+
         if self.debug:
-            print(f"日期 {today} 选出股票 {filtered_length} 只")
-            if filtered_length > 0:
-                print(f"前5只 {result.head(5)}")
-        
-        return result
+            print(f"日期 {today} 选出股票 {len(row_indices)} 只")
     
 
     def buy(self) -> None:
         """执行买入操作"""
-        # 没选出来票,不买
-        picked_data = self.picked_data
-        if picked_data is None or picked_data.is_empty():
+        numpy_data = self.picked_numpy_data
+        if numpy_data is None or len(numpy_data['code']) == 0:
             return
-        
-        # 达到最大持仓了,不买
+
         hold = self.hold
         hold_codes = self.hold_codes
         max_hold_count = self.max_hold_count
         current_hold_count = len(hold)
         if current_hold_count >= max_hold_count:
             return
-        
-        # 计算每个股票买入金额（分）
-        remaining_hold_count = max_hold_count - current_hold_count
-        
-        free_amount = self.free_amount
-        # 单只股票最大购买金额
-        buy_amount_per_stock_cents = free_amount // remaining_hold_count
-        # buy_amount_per_stock_cents = min(2000000, buy_amount_per_stock_cents)
 
-        
-        # 计算买入的票的数量 按今天的开盘价买
+        remaining_hold_count = max_hold_count - current_hold_count
+        free_amount = self.free_amount
+        buy_amount_per_stock_cents = free_amount // remaining_hold_count
         today = self.today
-        for row in picked_data.iter_rows(named=True):
-            # 持仓数量够了,跳过买入
-            if len(hold) >= max_hold_count:
-                break
-            
-            # 已持有的股票不能重复购买（O(1)查找）
-            code = row["code"]
-            if code in hold_codes:
-                continue
-            
-            next_open = row["next_open"]
-            # 只能买100的整数
-            buy_count = buy_amount_per_stock_cents // next_open // 100 * 100
-            if buy_count <= 0:
-                continue
-            
+
+        # 直接使用 NumPy 数组，无需 to_numpy() 转换
+        codes = numpy_data['code']
+        next_opens = numpy_data['next_open']
+        buy_counts = buy_amount_per_stock_cents // next_opens // 100 * 100
+
+        # 使用 Numba JIT 编译的过滤函数，避免 np.isin 开销
+        hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
+        valid_mask = _filter_buy_mask(codes, buy_counts, hold_codes_arr)
+        valid_codes = codes[valid_mask]
+        valid_opens = next_opens[valid_mask]
+        valid_counts = buy_counts[valid_mask]
+
+        # 批量买入，限制数量
+        buy_limit = min(len(valid_codes), max_hold_count - current_hold_count)
+        for i in range(buy_limit):
+            code = int(valid_codes[i])
+            next_open = int(valid_opens[i])
+            buy_count = int(valid_counts[i])
             hold_stock = HoldStock(code, next_open, buy_count, today)
             self._add_hold(hold_stock)
             cost_cents = buy_count * next_open
             self.free_amount -= cost_cents
-            
+
             if self.debug:
                 free_amount = self.free_amount / 100
                 cost = cost_cents / 100
