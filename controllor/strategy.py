@@ -26,6 +26,12 @@ def _filter_buy_mask(codes, buy_counts, hold_codes_arr):
 # 全局常量
 EMPTY_STRING = ""
 
+# 全局选票缓存结构：
+# _global_pick_cache: {date -> {code_arr, next_open_arr, price_limit_status_arr}}
+# _global_pick_cache_param_key: 当前缓存对应的参数标识 (buy_param_str + pick_param_str)
+_global_pick_cache: dict[int, dict] = {}
+_global_pick_cache_param_key: str = ""
+
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
 class Strategy:
@@ -56,6 +62,8 @@ class Strategy:
         self.data = None
         self.calendar = None
         self.debug = debug
+        # 预计算选票参数标识，避免重复创建字符串
+        self._pick_param_key = self._compute_pick_param_key()
         self._init_pick_filter()
         self._init_pick_sorter()
         self.reset()
@@ -107,12 +115,39 @@ class Strategy:
                 return hold
         return None
     
+    def _compute_pick_param_key(self) -> str:
+        """预计算选票参数标识，策略初始化时调用一次"""
+        buy_key = ",".join(map(str, self.buy_param_arr))
+        pick_key = ",".join(map(str, self.pick_param_arr))
+        return f"{buy_key}|{pick_key}"
+
     def pick(self) -> None:
-        """选择符合条件的股票"""
+        """选择符合条件的股票，使用全局缓存避免重复计算
+        缓存按参数组管理，参数变化时自动清理旧缓存
+        """
+        global _global_pick_cache, _global_pick_cache_param_key
+
         today = self.today
+
+        # 检查参数是否变化，变化则清理缓存（使用预计算的参数标识）
+        if self._pick_param_key != _global_pick_cache_param_key:
+            _global_pick_cache.clear()
+            _global_pick_cache_param_key = self._pick_param_key
+            if self.debug:
+                print(f"参数变化，清理选票缓存，新参数: {self._pick_param_key}")
+
+        # 检查缓存
+        if today in _global_pick_cache:
+            self.picked_numpy_data = _global_pick_cache[today]
+            if self.debug:
+                count = len(self.picked_numpy_data['code']) if self.picked_numpy_data else 0
+                print(f"日期 {today} 选出股票 {count} 只 (缓存)")
+            return
+
         numpy_data = self.data.get_numpy_data_by_date(today)
         if numpy_data is None or len(numpy_data['code']) == 0:
             self.picked_numpy_data = None
+            _global_pick_cache[today] = None
             if self.debug:
                 print(f"日期 {today} 无符合条件股票")
             return
@@ -120,6 +155,7 @@ class Strategy:
         mask = self._pick_filter(numpy_data)
         if not mask.any():
             self.picked_numpy_data = None
+            _global_pick_cache[today] = None
             if self.debug:
                 print(f"日期 {today} 无符合条件股票")
             return
@@ -132,6 +168,9 @@ class Strategy:
             'next_open': numpy_data['next_open'][sorted_indices],
             'price_limit_status': numpy_data['price_limit_status'][sorted_indices],
         }
+
+        # 存入缓存
+        _global_pick_cache[today] = self.picked_numpy_data
 
         if self.debug:
             print(f"日期 {today} 选出股票 {len(sorted_indices)} 只")
