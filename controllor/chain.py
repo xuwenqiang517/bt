@@ -14,7 +14,7 @@ from strategy_impl import *
 
 class Chain:
     def __init__(self, param=None):
-        self.strategies = param["strategy"]  # 策略列表
+        self.strategies = param.get("strategy")  # 策略列表（可能为None，使用生成器模式）
         self.date_arr = param["date_arr"]  # 回测时间周期列表
         self.chain_debug = param.get("chain_debug", False)  # 是否打印报告
         self.win_rate_threshold = param.get("win_rate_threshold", 0.99)  # 胜率阈值，默认65%
@@ -24,6 +24,11 @@ class Chain:
 
         self.param = param  # 原始参数
         self.result_file = param.get("result_file", None)  # 结果文件
+
+        # 生成器模式相关参数
+        self.use_param_generator = param.get("use_param_generator", False)
+        self.param_generator = param.get("param_generator", None)
+        self.total_strategy_count = param.get("total_strategy_count", 0)
 
     def _draw_fund_trend(self, daily_values, title):
         """绘制资金变化趋势图表并保存到data目录"""
@@ -140,7 +145,7 @@ class Chain:
             successful_count=total_count-failure_count
             actual_win_rate = successful_count / total_count if results else 0
 
-            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('sell_param_arr')])
+            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
             new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key)
             print(new_row)
             if is_debug:
@@ -374,5 +379,145 @@ class Chain:
             print(f"夏普比率: {result.夏普比率:.2f}")
             print(f"平均资金使用率: {result.平均资金使用率*100:.2f}%")
             print("=" * 50)
-        
+
         return result
+
+    def execute_generator_mode(self) -> list:
+        """生成器模式执行 - 动态生成参数，避免内存爆炸"""
+        import multiprocessing
+
+        # 先合并所有进程的缓存
+        self._merge_thread_caches()
+
+        total_strategies = self.total_strategy_count
+        print(f"总策略数: {total_strategies}")
+        print(f"使用进程数: {self.processor_count}")
+
+        if total_strategies == 0:
+            print("所有策略已执行完毕，无需处理")
+            return
+
+        # 计算每个进程的任务范围
+        processes = []
+
+        if self.processor_count == 1:
+            # 单进程时直接在当前进程执行
+            print(f"单进程模式，直接在当前进程执行")
+            start_idx, end_idx = self.param_generator.get_worker_slice(0, 1)
+            self._process_strategy_generator(0, start_idx, end_idx)
+        else:
+            # 多进程时，主进程处理第一组，其余由子进程处理
+            print(f"多进程模式，主进程处理一组，创建 {self.processor_count - 1} 个子进程")
+
+            # 创建并启动子进程处理剩余组
+            for i in range(1, self.processor_count):
+                start_idx, end_idx = self.param_generator.get_worker_slice(i, self.processor_count)
+                process_name = f"ChainProcess-{i}"
+                process = multiprocessing.Process(
+                    target=self._process_strategy_generator_worker,
+                    args=(i, start_idx, end_idx, self.param, self.result_file),
+                    name=process_name
+                )
+                processes.append(process)
+                process.start()
+                print(f"启动进程: {process_name}，处理策略数: {end_idx - start_idx}")
+
+            # 主进程处理第一组
+            start_idx, end_idx = self.param_generator.get_worker_slice(0, self.processor_count)
+            self._process_strategy_generator(0, start_idx, end_idx)
+
+            # 等待所有子进程完成
+            for i, process in enumerate(processes):
+                process.join()
+                print(f"进程 {i+1} ({process.name}) 处理完成")
+
+        # 所有策略执行完成后，合并所有进程的缓存
+        self._merge_thread_caches()
+
+        return
+
+    def _process_strategy_generator(self, thread_id: int, start_idx: int, end_idx: int) -> None:
+        """处理指定索引范围的策略（生成器模式）"""
+        # 为每个进程创建独立的缓存
+        cache = LocalCache()
+        thread_result_file = f"{self.result_file}_thread_{thread_id}"
+
+        # 在子进程中初始化 stock_data 和 calendar
+        stock_data = sd(force_refresh=self.force_refresh)
+        calendar = sc()
+        is_debug = self.chain_debug
+
+        # 加载进程本地缓存
+        cache_filename = f"a_{thread_result_file}"
+        cached_a_df = self._load_cache(cache, cache_filename)
+        fail_count = self.fail_count
+
+        # 计算固定值
+        total_count = len(self.date_arr)
+        count = 0
+
+        # 动态生成参数并处理
+        param_count = end_idx - start_idx
+        for params in tqdm(self.param_generator.get_slice_params(start_idx, end_idx),
+                          desc=f"进程 {thread_id} 执行策略", total=param_count, position=thread_id, leave=True, mininterval=1):
+            count += 1
+            strategy = UpStrategy(**params)
+            results = []
+            failure_count = 0
+            all_daily_values = []
+
+            for s, e in self.date_arr:
+                result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
+                if hasattr(strategy, 'daily_values') and strategy.daily_values:
+                    all_daily_values.extend(strategy.daily_values)
+
+                if result.总收益率 <= 0:
+                    failure_count += 1
+                    if failure_count > fail_count and not is_debug:
+                        break
+                results.append(result)
+
+            if failure_count > fail_count and not is_debug:
+                continue
+
+            successful_count = total_count - failure_count
+            actual_win_rate = successful_count / total_count if results else 0
+
+            cache_key = "|".join(",".join(map(str, arr)) for arr in
+                              [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
+            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key)
+            print(new_row)
+
+            if is_debug:
+                if 'new_row' in locals():
+                    print(f"进程 {thread_id}: {new_row}")
+                self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
+
+            # 直接将new_row转换为DataFrame并处理
+            new_data_df = pl.DataFrame([new_row])
+            if cached_a_df.is_empty():
+                cached_a_df = new_data_df
+            else:
+                cached_a_df = self._merge_and_sort_data(cached_a_df, new_data_df)
+
+            if count % 5 == 0:
+                cached_a_df = self._sort_data(cached_a_df)
+                self._save_cache(cache, cache_filename, cached_a_df)
+
+        cached_a_df = self._sort_data(cached_a_df)
+        self._save_cache(cache, cache_filename, cached_a_df)
+
+    @staticmethod
+    def _process_strategy_generator_worker(thread_id: int, start_idx: int, end_idx: int, param: dict, result_file: str) -> None:
+        """子进程工作函数（静态方法，可序列化）"""
+        from param_generator import ParamGenerator
+
+        # 重新创建生成器和Chain实例
+        gen = ParamGenerator()
+        chain = Chain(param=param)
+        chain.param_generator = gen
+        chain.result_file = result_file
+
+        chain._process_strategy_generator(thread_id, start_idx, end_idx)
+
+

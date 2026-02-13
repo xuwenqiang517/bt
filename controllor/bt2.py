@@ -18,71 +18,71 @@ from itertools import product
 # """
 
 def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count=1000000000, force_refresh=False):
+    from datetime import datetime
     day_array = sc().get_date_arr()
-    result_file = f"all_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-最多失败{fail_count}"
+    current_time = datetime.now().strftime("%m%d_%H%M")
+    result_file = f"all_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-最多失败{fail_count}-{current_time}"
 
-    strategy_params_list = []
     if strategy_params is not None:
+        # 指定参数模式 - 直接解析
         strategy_params_list = str2dict(strategy_params)
+        strategy_params_list = strategy_params_list[:max_strategy_count]
+        print(f"策略参数数量: {len(strategy_params_list)}")
+        random.shuffle(strategy_params_list)
+
+        param = {
+            "strategy": strategy_params_list,
+            "date_arr": day_array,
+            "chain_debug": 1,
+            "result_file": result_file,
+            "processor_count": processor_count,
+            "fail_count": fail_count,
+            "force_refresh": force_refresh
+        }
+        chain = Chain(param=param)
+        chain.execute()
     else:
-        # 买入参数范围
-        hold_count_range = range(2, 11, 1)          # 持仓数量
-        buy_up_day_range = range(1, 5, 1)           # 连涨天数
-        buy_day3_range = range(3, 15, 5)            # 3日涨幅最低
-        buy_day5_range = range(3, 20, 5)            # 5日涨幅最低
-        sort_field_range = range(0, 10, 1)          # 排序字段: 0=amount, 1=change_pct, 2=change_3d, 3=change_5d, 4=consecutive_up_days, 5=volume, 6=close, 7=open, 8=high, 9=low
-        sort_desc_range = [0, 1]                    # 排序方式: 0=升序, 1=降序
+        # 参数搜索模式 - 使用生成器，不预生成列表
+        from param_generator import ParamGenerator
+        gen = ParamGenerator()
+        total_count = min(gen.get_total_count(), max_strategy_count)
+        print(f"总策略参数数量: {total_count}")
 
-        # 卖出参数范围
-        sell_stop_loss_range = range(-20, -4, 5)    # 止损率
-        sell_hold_days_range = range(2, 6, 1)       # 持仓天数
-        sell_target_return_range = range(5, 21, 2)  # 目标涨幅
-        sell_trailing_range = range(2, 10, 2)       # 移动止盈回撤率
-
-        # 使用 itertools.product 生成所有参数组合
-        for (a, buy1, buy2, buy3, sort_field, sort_desc,
-             sell1, sell2, sell3, sell4) in product(
-            hold_count_range, buy_up_day_range, buy_day3_range, buy_day5_range,
-            sort_field_range, sort_desc_range,
-            sell_stop_loss_range, sell_hold_days_range, sell_target_return_range, sell_trailing_range
-        ):
-            strategy_params_list.append({
-                "base_param_arr": [10000000, a],
-                "buy_param_arr": [buy1, buy2, buy3],
-                "pick_param_arr": [sort_field, sort_desc],
-                "sell_param_arr": [sell1, sell2, sell3, sell4],
-                "debug": 0
-            })
-
-    strategy_params_list = strategy_params_list[:max_strategy_count]
-    print(f"策略参数数量: {len(strategy_params_list)}")
-    random.shuffle(strategy_params_list)
-
-    param = {
-        "strategy": strategy_params_list,
-        "date_arr": day_array,
-        "chain_debug": 0 if strategy_params is None else 1,
-        "result_file": result_file,
-        "processor_count": processor_count,
-        "fail_count": fail_count,
-        "force_refresh": force_refresh
-    }
-    chain = Chain(param=param)
-    chain.execute()
+        param = {
+            "strategy": None,  # 不使用预生成列表
+            "date_arr": day_array,
+            "chain_debug": 0,
+            "result_file": result_file,
+            "processor_count": processor_count,
+            "fail_count": fail_count,
+            "force_refresh": force_refresh,
+            "use_param_generator": True,
+            "param_generator": gen,
+            "total_strategy_count": total_count
+        }
+        chain = Chain(param=param)
+        chain.execute_generator_mode()
 
 
 def str2dict(strategy_params):
-    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅|排序字段,排序方式|止损率,持仓天数,目标涨幅,回撤率
+    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停次数|排序字段,排序方式|止损率,持仓天数,目标涨幅,回撤率
+    # 示例: 3|2,10,15,5,0|0,1|-15,2,8,3
     parts = strategy_params.strip().split("|")
     base_arr = parts[0]
     buy_arr = parts[1]
     pick_arr = parts[2] if len(parts) > 2 else "0,1"
     sell_arr = parts[3] if len(parts) > 3 else "-15,2,8,3"
 
+    # 解析买入参数，兼容旧格式（3个参数）和新格式（5个参数）
+    buy_params = list(map(int, buy_arr.split(",")))
+    if len(buy_params) == 3:
+        # 旧格式，补充默认值
+        buy_params.extend([5, 0])  # 涨幅上限默认5，涨停次数默认0（不限制）
+
     strategy_params_list = []
     strategy_params_list.append({
         "base_param_arr": [10000000, int(base_arr.split(",")[0])],
-        "buy_param_arr": list(map(int, buy_arr.split(","))),
+        "buy_param_arr": buy_params,
         "pick_param_arr": list(map(int, pick_arr.split(","))),
         "sell_param_arr": list(map(int, sell_arr.split(","))),
         "debug": 1
@@ -92,7 +92,9 @@ def str2dict(strategy_params):
 
 
 def bt_one(strategy_params, day_array):
-    result_file = f"one_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}"
+    from datetime import datetime
+    current_time = datetime.now().strftime("%m%d_%H%M")
+    result_file = f"one_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-{current_time}"
     param = {
         "strategy": str2dict(strategy_params),
         "date_arr": day_array,
@@ -105,7 +107,7 @@ def bt_one(strategy_params, day_array):
 
 if __name__ == "__main__":
     s = """
-    3|2,10,15|0,1|-15,2,8,3
+    4|4,3,13|5,0|-20,3,5,3
     """
 
     bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000)
@@ -113,3 +115,5 @@ if __name__ == "__main__":
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
     # bt_one(s,[[20250101,20260101]])
+
+# /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py

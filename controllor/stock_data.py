@@ -69,19 +69,10 @@ class StockData:
                     name="consecutive_up_days",
                     values=self.calc_up_days(df["close"].to_numpy()),  # 转为numpy数组适配原函数
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
-                )
+                ),
+                # 计算limit_up_count_20d：20天内涨停次数（涨幅>=9.9%）
+                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=20).cast(pl.Int8).alias("limit_up_count_20d")
             ]).drop(["ma5_vol", "ma10_vol"]).collect()
-            # .with_columns([
-            #     # 计算has_limit_up_20d：判断20天内是否有涨停（涨幅>=9.9%）
-            #     (pl.col("change_pct").rolling_max(window_size=20) >= 9.9).cast(pl.Int8).alias("has_limit_up_20d"),
-            #     # 计算ma_up：当日成交>=1.5 * ma5 & ma5>ma10 为1，否则为0
-            #     ((pl.col("volume") >= pl.col("ma5_vol") * 1.5 ) & (pl.col("ma5_vol") > pl.col("ma10_vol"))).cast(pl.Int8).alias("ma_vol_up")
-            # ]).with_columns([
-            #     # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件
-            #     ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up"),
-            #     # 计算has_limit_up_and_vol_up：同时满足has_limit_up_20d和ma_vol_up两个条件，且change_pct_between_3_5为1
-            #     ((pl.col("has_limit_up_20d") == 1) & (pl.col("ma_vol_up") == 1) & (pl.col("change_pct_between_3_5") == 1)).cast(pl.Int8).alias("has_limit_up_and_vol_up_3_5")
-            # ]).drop(["ma5_vol", "ma10_vol"]).collect()
         
         return df_tech
 
@@ -113,6 +104,7 @@ class StockData:
                 'change_3d': group['change_3d'].to_numpy(),
                 'change_5d': group['change_5d'].to_numpy(),
                 'change_pct': group['change_pct'].to_numpy(),
+                'limit_up_count_20d': group['limit_up_count_20d'].to_numpy(),
                 'amount': group['amount'].to_numpy(),
                 '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
             }

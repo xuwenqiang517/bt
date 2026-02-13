@@ -21,16 +21,22 @@ SORT_FIELD_MAP = {
 
 
 @njit(cache=True)
-def _filter_numba(up_days, change_3d, change_5d, change_pct,
-                  buy_up_day_min, buy_day3_min, buy_day5_min):
+def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_20d,
+                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min):
     """Numba JIT 编译的筛选函数"""
     n = len(up_days)
     result = np.empty(n, dtype=np.bool_)
     for i in range(n):
-        result[i] = (up_days[i] >= buy_up_day_min and
-                     change_3d[i] > buy_day3_min and
-                     change_5d[i] > buy_day5_min and
-                     change_pct[i] < 5)
+        # 基础条件
+        base_ok = (up_days[i] >= buy_up_day_min and
+                   change_3d[i] > buy_day3_min and
+                   change_5d[i] > buy_day5_min and
+                   change_pct[i] < change_pct_max)
+        # 20天涨停次数条件（0表示不限制）
+        if limit_up_count_min > 0:
+            result[i] = base_ok and (limit_up_count_20d[i] >= limit_up_count_min)
+        else:
+            result[i] = base_ok
     return result
 
 
@@ -60,6 +66,8 @@ class UpStrategy(Strategy):
         buy_up_day_min = self.buy_param_arr[0]
         buy_day3_min = self.buy_param_arr[1]
         buy_day5_min = self.buy_param_arr[2]
+        change_pct_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else 5  # 当日涨幅上限，默认5%
+        limit_up_count_min = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else 0  # 20天内涨停次数最低要求，0表示不限制
 
         def filter_func(numpy_data: dict):
             mask = _filter_numba(
@@ -67,7 +75,8 @@ class UpStrategy(Strategy):
                 numpy_data['change_3d'],
                 numpy_data['change_5d'],
                 numpy_data['change_pct'],
-                buy_up_day_min, buy_day3_min, buy_day5_min
+                numpy_data['limit_up_count_20d'],
+                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min
             )
             return mask
         self._pick_filter = filter_func
@@ -75,7 +84,7 @@ class UpStrategy(Strategy):
     def _init_pick_sorter(self):
         """初始化排序函数，根据参数动态排序"""
         sort_field_idx = self.pick_param_arr[0] if len(self.pick_param_arr) > 0 else 0
-        sort_desc = self.pick_param_arr[1] if len(self.pick_param_arr) > 1 else 1
+        sort_desc = self.pick_param_arr[1] if len(self.pick_param_arr) > 1 else 1  # 0=升序(小到大), 1=降序(大到小)
 
         sort_field = SORT_FIELD_MAP.get(sort_field_idx, 'amount')
         desc = bool(sort_desc)
