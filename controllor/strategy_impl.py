@@ -1,8 +1,6 @@
-import polars as pl
 import numpy as np
 from numba import njit
 
-from dto import *
 from strategy import Strategy
 
 # 排序字段映射
@@ -58,9 +56,7 @@ def _argsort_numba(arr, desc):
 
 
 class UpStrategy(Strategy):
-    def __init__(self, base_param_arr, sell_param_arr, buy_param_arr, pick_param_arr, debug):
-        super().__init__(base_param_arr, sell_param_arr, buy_param_arr, pick_param_arr, debug)
-        self.sell_chain_list = self.init_sell_strategy_chain()
+    pass
 
     def _init_pick_filter(self):
         buy_up_day_min = self.buy_param_arr[0]
@@ -106,10 +102,3 @@ class UpStrategy(Strategy):
             return row_indices[sorted_local_indices]
 
         self._pick_sorter = sorter_func
-
-    def init_sell_strategy_chain(self):
-        sell1, sell2, sell3, sell4 = self.sell_param_arr
-        strategies = []
-        strategies.append(SellStrategy("静态止损", sell1 / 100.0))
-        strategies.append(SellStrategy("贪婪止盈", (sell2, sell3 / 100.0, sell4 / 100.0)))
-        return strategies

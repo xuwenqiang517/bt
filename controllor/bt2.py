@@ -65,23 +65,29 @@ def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count
 
 
 def str2dict(strategy_params):
-    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停次数|排序字段,排序方式|止损率,持仓天数,目标涨幅,回撤率
-    # 示例: 3|2,10,15,5,0|0,1|-15,2,8,3
+    # 格式: 持仓数量,买卖顺序,仓位模式,仓位值|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停次数|排序字段,排序方式|止损率,持仓天数,目标涨幅,回撤率
+    # 示例: 3,1,0,0|2,10,15,5,0|0,1|-15,2,8,3
     parts = strategy_params.strip().split("|")
     base_arr = parts[0]
     buy_arr = parts[1]
     pick_arr = parts[2] if len(parts) > 2 else "0,1"
     sell_arr = parts[3] if len(parts) > 3 else "-15,2,8,3"
 
+    # 解析基础参数，兼容旧格式（1个参数）和新格式（4个参数）
+    base_params = list(map(int, base_arr.split(",")))
+    hold_count = base_params[0]
+    buy_first = base_params[1] if len(base_params) > 1 else 1  # 1=先买后卖
+    position_mode = base_params[2] if len(base_params) > 2 else 0  # 0=剩余均分
+    position_value = base_params[3] if len(base_params) > 3 else 0  # 比例或金额
+
     # 解析买入参数，兼容旧格式（3个参数）和新格式（5个参数）
     buy_params = list(map(int, buy_arr.split(",")))
     if len(buy_params) == 3:
-        # 旧格式，补充默认值
-        buy_params.extend([5, 0])  # 涨幅上限默认5，涨停次数默认0（不限制）
+        buy_params.extend([5, 0])
 
     strategy_params_list = []
     strategy_params_list.append({
-        "base_param_arr": [10000000, int(base_arr.split(",")[0])],
+        "base_param_arr": [10000000, hold_count, buy_first, position_mode, position_value],
         "buy_param_arr": buy_params,
         "pick_param_arr": list(map(int, pick_arr.split(","))),
         "sell_param_arr": list(map(int, sell_arr.split(","))),
@@ -107,13 +113,15 @@ def bt_one(strategy_params, day_array):
 
 if __name__ == "__main__":
     s = """
-    4|4,3,13|5,0|-20,3,5,3
+    9|4,3,13,3,0|3,1|-20,2,5,3
     """
 
     bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
-    # bt_one(s,[[20250101,20260101]])
+    # bt_one(s,[[20260201,202602012]])
+    bt_one(s,[[20250101,20260101]])
+    
 
 # /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py

@@ -130,15 +130,16 @@ class Chain:
                 result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
-                # print(result)
-                # if result.总收益率 <= 0 or result.胜率 <= 0.4:
-                if result.总收益率 <= 0:
+
+                # 过滤条件：收益率为负 或 最大回撤超过20%（最小资金<初始资金80%）
+                init_amount = params.get('base_param_arr')[0]
+                max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
+
+                if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
-                    if failure_count>fail_count and not is_debug:
-                        break
                 results.append(result)
 
-            if failure_count>fail_count and not is_debug:
+            if failure_count > fail_count and not is_debug:
                 # print(f"[DEBUG] 策略被跳过: failure_count={failure_count}, fail_count={fail_count}, is_debug={is_debug}")
                 continue
 
@@ -204,18 +205,19 @@ class Chain:
         return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """排序DataFrame"""
-        # 先添加一个临时列，提取周期胜率的数值用于排序
-        df = df.with_columns(
-            pl.col('周期胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('周期胜率数值')
-        )
-        # 按照周期胜率数值、平均胜率和平均收益率排序
+        """排序DataFrame，优先按周期胜率排序"""
+        # 先添加临时列，提取周期胜率和平均胜率的数值用于排序
+        df = df.with_columns([
+            pl.col('周期胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('周期胜率数值'),
+            pl.col('平均胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('平均胜率数值')
+        ])
+        # 按照周期胜率数值、平均收益率排序（平均胜率优先级降低）
         df = df.sort(
-            by=['周期胜率数值', '平均胜率', '平均收益率'], 
+            by=['周期胜率数值', '平均收益率', '平均胜率数值'],
             descending=[True, True, True]
         )
         # 删除临时列
-        df = df.drop('周期胜率数值')
+        df = df.drop(['周期胜率数值', '平均胜率数值'])
         return df
     
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str) -> dict:
@@ -359,8 +361,12 @@ class Chain:
         while current_idx != -1 and current_idx <= end_idx:
             current_date = scalendar.get_date(current_idx)
             strategy.update_today(current_date)
-            strategy.buy()
-            strategy.sell()
+            if strategy.buy_first:
+                strategy.buy()
+                strategy.sell()
+            else:
+                strategy.sell()
+                strategy.buy()
             strategy.pick()
             strategy.settle_amount()
             current_idx = scalendar.next(current_idx)

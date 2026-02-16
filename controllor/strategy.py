@@ -35,14 +35,6 @@ _global_pick_cache_param_key: str = ""
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
 class Strategy:
-    # 策略映射，避免重复的条件判断
-    STRATEGY_MAP = {
-        "静态止损": "stop_loss",
-        "静态止盈": "stop_profit",
-        "贪婪止盈": "greedy_stop_profit",
-        "移动止盈": "trailing_stop_profit",
-        "时间止盈": "time_based_sell"
-    }
     
     def __init__(self, base_param_arr: list, sell_param_arr: list, buy_param_arr: list, pick_param_arr: list, debug: bool):
         """初始化策略
@@ -59,6 +51,10 @@ class Strategy:
         self.buy_param_arr = buy_param_arr
         self.pick_param_arr = pick_param_arr if pick_param_arr else [0, 1]
         self.init_amount, self.max_hold_count = base_param_arr[0], base_param_arr[1]
+        # base_param_arr扩展参数：买卖顺序、仓位模式、仓位比例/金额
+        self.buy_first = base_param_arr[2] if len(base_param_arr) > 2 else 1  # 1=先买后卖, 0=先卖后买
+        self.position_mode = base_param_arr[3] if len(base_param_arr) > 3 else 0  # 0=剩余均分, 1=固定比例, 2=固定金额
+        self.position_value = base_param_arr[4] if len(base_param_arr) > 4 else 0  # 比例(%)或金额(分)
         self.data = None
         self.calendar = None
         self.debug = debug
@@ -176,6 +172,19 @@ class Strategy:
             print(f"日期 {today} 选出股票 {len(sorted_indices)} 只")
     
 
+    def _calc_buy_amount_per_stock(self, free_amount: int, remaining_hold_count: int, next_open: int) -> int:
+        """计算每只股票买入金额（分）"""
+        if self.position_mode == 1:
+            # 固定比例模式：总资金的固定百分比
+            amount = int(self.init_amount * self.position_value / 100)
+        elif self.position_mode == 2:
+            # 固定金额模式：每只票固定金额
+            amount = self.position_value
+        else:
+            # 默认：剩余资金平均分配
+            amount = free_amount // remaining_hold_count
+        return amount
+
     def buy(self) -> None:
         """执行买入操作"""
         numpy_data = self.picked_numpy_data
@@ -191,31 +200,37 @@ class Strategy:
 
         remaining_hold_count = max_hold_count - current_hold_count
         free_amount = self.free_amount
-        buy_amount_per_stock_cents = free_amount // remaining_hold_count
         today = self.today
 
-        # 直接使用 NumPy 数组，无需 to_numpy() 转换
+        # 直接使用 NumPy 数组
         codes = numpy_data['code']
         next_opens = numpy_data['next_open']
         price_limit_status = numpy_data['price_limit_status']
-        buy_counts = buy_amount_per_stock_cents // next_opens // 100 * 100
 
-        # 过滤涨停股票（price_limit_status == 1 表示次日涨停）
+        # 过滤涨停股票
         limit_up_mask = price_limit_status != 1
-
-        # 使用 Numba JIT 编译的过滤函数，避免 np.isin 开销
         hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
+
+        # 计算每只票的买入股数
+        buy_counts = np.zeros(len(codes), dtype=np.int64)
+        for i in range(len(codes)):
+            if limit_up_mask[i]:
+                amount = self._calc_buy_amount_per_stock(free_amount, remaining_hold_count, next_opens[i])
+                buy_counts[i] = amount // next_opens[i] // 100 * 100
+
         valid_mask = _filter_buy_mask(codes, buy_counts, hold_codes_arr) & limit_up_mask
         valid_codes = codes[valid_mask]
         valid_opens = next_opens[valid_mask]
         valid_counts = buy_counts[valid_mask]
 
-        # 批量买入，限制数量
-        buy_limit = min(len(valid_codes), max_hold_count - current_hold_count)
+        # 批量买入
+        buy_limit = min(len(valid_codes), remaining_hold_count)
         for i in range(buy_limit):
             code = int(valid_codes[i])
             next_open = int(valid_opens[i])
             buy_count = int(valid_counts[i])
+            if buy_count <= 0:
+                continue
             hold_stock = HoldStock(code, next_open, buy_count, today)
             self._add_hold(hold_stock)
             cost_cents = buy_count * next_open
@@ -228,17 +243,15 @@ class Strategy:
 
     def sell(self) -> None:
         is_debug=self.debug
-        """执行卖出操作"""
+        """执行卖出操作，使用统一的卖出策略"""
         hold = self.hold
         hold_length = len(hold)
         if hold_length == 0:
             return
 
         today = self.today
-        sell_chain_list = getattr(self, 'sell_chain_list', [])
-        sell_chain_length = len(sell_chain_list)
-
         sells_info: list[tuple[int, int, str]] = []
+
         for i in range(hold_length):
             hold_stock = hold[i]
             code = hold_stock.code
@@ -260,29 +273,12 @@ class Strategy:
             stock_data_tuple = (stock_data_dict['open'], stock_data_dict['close'],
                                stock_data_dict['high'], stock_data_dict['low'])
 
-            # 策略决定判断是否要卖掉这个票
-            need_sell, sell_price, reason = False, 0, ""
-            buy_price = hold_stock.buy_price
-            
-            for j in range(sell_chain_length):
-                sell_strategy = sell_chain_list[j]
-                sell_name = sell_strategy.name
-                params = sell_strategy.params
-                # 使用类属性策略映射查找方法名
-                method_name = self.STRATEGY_MAP.get(sell_name)
-                if not method_name:
-                    raise ValueError(f"未知的卖出策略: {sell_name}")
-                # 获取对应的方法对象
-                strategy_func = getattr(self, method_name)
-                # 调用对应的策略函数
-                need_sell, sell_price, reason = strategy_func(hold_stock, stock_data_tuple, params)
-                # 设置颜色
-                if is_debug:
-                    reason = f"\033[91m{reason}\033[0m" if sell_price > buy_price else f"\033[92m{reason}\033[0m"
-                # 如果某个策略触发卖出，则不再检查其他策略
-                if need_sell:
-                    break
-            
+            # 调用统一的卖出策略
+            need_sell, sell_price, reason = self._check_sell(hold_stock, stock_data_tuple)
+            if is_debug:
+                buy_price = hold_stock.buy_price
+                reason = f"\033[91m{reason}\033[0m" if sell_price > buy_price else f"\033[92m{reason}\033[0m"
+
             if need_sell:
                 sells_info.append((code, sell_price, reason))
         
@@ -324,136 +320,55 @@ class Strategy:
                     print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {free_amount:.2f}")
                 
 
-    def stop_loss(self, hold: HoldStock, stock_data_tuple: tuple, params: float) -> tuple[bool, int, str]:
+    def _check_sell(self, hold: HoldStock, stock_data_tuple: tuple) -> tuple[bool, int, str]:
         """
-        触发固定阈值的止损卖出
+        统一卖出策略：止损 + 贪婪止盈
+        sell_param_arr: [止损率, 持仓天数, 目标涨幅, 回撤率]
         """
-        #计算止损价
-        stop_loss_price = int(hold.buy_price * (1 + params))
-        # 缓存常用值 (open, close, high, low)
-        open_price = stock_data_tuple[0]
-        low_price = stock_data_tuple[3]
-        is_debug=self.debug
+        stop_loss_rate, hold_days_limit, target_return, trailing_rate = self.sell_param_arr
+        stop_loss_rate = stop_loss_rate / 100.0
+        target_return = target_return / 100.0
+        trailing_rate = trailing_rate / 100.0
+
+        open_price, close_price, high_price, low_price = stock_data_tuple
+        buy_price = hold.buy_price
+        is_debug = self.debug
+
+        # 1. 止损检查
+        stop_loss_price = int(buy_price * (1 + stop_loss_rate))
         if open_price <= stop_loss_price:
             if is_debug:
-                return True, open_price, f"开盘价{open_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params):.2%}),以开盘价{open_price/100:.2f}卖出"
+                return True, open_price, f"止损：开盘价{open_price/100:.2f}<=止损价{stop_loss_price/100:.2f}({abs(stop_loss_rate):.2%})"
             return True, open_price, EMPTY_STRING
-        elif low_price <= stop_loss_price:
+        if low_price <= stop_loss_price:
             if is_debug:
-                return True, stop_loss_price, f"盘中最低价{low_price/100:.2f}<{stop_loss_price/100:.2f}({abs(params):.2%}),以止损价{stop_loss_price/100:.2f}卖出"
+                return True, stop_loss_price, f"止损：最低价{low_price/100:.2f}<=止损价{stop_loss_price/100:.2f}"
             return True, stop_loss_price, EMPTY_STRING
-        return False, 0, EMPTY_STRING
-    
-    def stop_profit(self, hold: HoldStock, stock_data_tuple: tuple, params: float) -> tuple[bool, int, str]:
-        """
-        触发固定阈值的止盈卖出
-        """
-        #计算止盈价
-        stop_profit_price = int(hold.buy_price * (1 + params))
-        # 缓存常用值 (open, close, high, low)
-        open_price = stock_data_tuple[0]
-        high_price = stock_data_tuple[2]
-        is_debug=self.debug
-        if open_price >= stop_profit_price:
-            if is_debug:
-                return True, open_price, f"开盘价{open_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params:.2%}),以开盘价{open_price/100:.2f}卖出"
-            return True, open_price, EMPTY_STRING
-        elif high_price >= stop_profit_price:
-            if is_debug:
-                return True, stop_profit_price, f"盘中最高价{high_price/100:.2f}>止盈价{stop_profit_price/100:.2f}({params:.2%}),以止盈价{stop_profit_price/100:.2f}卖出"
-            return True, stop_profit_price, EMPTY_STRING
-        return False, 0, EMPTY_STRING
 
-    def greedy_stop_profit(self, hold: HoldStock, stock_data_tuple: tuple, params: tuple) -> tuple[bool, int, str]:
-        """
-        贪婪止盈策略
-        params: (days, min_return, trailing_stop_rate)
-        days: 持有天数阈值
-        min_return: 目标涨幅
-        trailing_stop_rate: 移动止盈回撤率
-        """
-        days=params[0] # 持仓天数阈值
-        min_return=params[1] # 目标涨幅
-        trailing_stop_rate=params[2] # 移动止盈回撤率
-        
-        # 计算持仓天数
-        hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        # 缓存常用值 (open, close, high, low)
-        close_price = stock_data_tuple[1]
-        open_price = stock_data_tuple[0]
-        is_debug=self.debug
-        # 计算整体涨幅（基于收盘价）
-        overall_return = (close_price - hold.buy_price) / hold.buy_price
-        # 计算实际涨幅（基于开盘价，因为实际卖出使用开盘价）
-        actual_return = (open_price - hold.buy_price) / hold.buy_price
-        
-        if hold_days <= days:
-            # 如果X天内没到目标收益，不管小赚还是小亏，都要卖出去
-            if overall_return < min_return:
-                # 卖"没达标"的，不管是否盈利
+        # 2. 贪婪止盈
+        current_hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
+        overall_return = (close_price - buy_price) / buy_price
+        actual_return = (open_price - buy_price) / buy_price
+
+        if current_hold_days <= hold_days_limit:
+            # 持仓天数内未达标，卖出
+            if overall_return < target_return:
                 if is_debug:
-                    return True, open_price, f"持仓{hold_days}天 涨幅{actual_return:.2%}<目标涨幅{min_return:.2%}，以开盘价{open_price/100:.2f}卖出"
+                    return True, open_price, f"未达标：持仓{current_hold_days}天 涨幅{actual_return:.2%}<目标{target_return:.2%}"
                 return True, open_price, EMPTY_STRING
         else:
-            # 移动止盈：基于上一天的最高价和回撤率计算止盈价格
-            # 计算止盈价格 = 最高价 * (1 - 回撤率)
+            # 移动止盈
             if hold.highest_price > 0:
-                stop_profit_price = int(hold.highest_price * (1 - trailing_stop_rate / 100))
-                
-                # 获取当日最低价
-                low_price = stock_data_tuple[3]
-                
-                # 比较开盘价和最低价与止盈价格的关系
-                if open_price <= stop_profit_price:
-                    # 开盘价比止盈价格低，以开盘价卖出
+                stop_price = int(hold.highest_price * (1 - trailing_rate))
+                if open_price <= stop_price:
                     if is_debug:
-                        return True, open_price, f"移动止盈：开盘价{open_price/100:.2f}<=止盈价{stop_profit_price/100:.2f}，以开盘价{open_price/100:.2f}卖出"
+                        return True, open_price, f"移动止盈：开盘价{open_price/100:.2f}<=止盈价{stop_price/100:.2f}"
                     return True, open_price, EMPTY_STRING
-                elif low_price <= stop_profit_price:
-                    # 最低价跌破止盈价格，以止盈价格卖出
+                if low_price <= stop_price:
                     if is_debug:
-                        return True, stop_profit_price, f"移动止盈：最低价{low_price/100:.2f}<=止盈价{stop_profit_price/100:.2f}，以止盈价{stop_profit_price/100:.2f}卖出"
-                    return True, stop_profit_price, EMPTY_STRING
-        
-        return False, 0, EMPTY_STRING
+                        return True, stop_price, f"移动止盈：最低价{low_price/100:.2f}<=止盈价{stop_price/100:.2f}"
+                    return True, stop_price, EMPTY_STRING
 
-    def trailing_stop_profit(self, hold: HoldStock, stock_data_tuple: tuple, params: float) -> tuple[bool, int, str]:
-        """
-        移动止盈策略：从最高持仓价格回撤指定百分比后卖出
-        """
-        # 计算止盈价（最高价格 * (1 - 回撤率)）
-        trailing_stop_price = int(hold.highest_price * (1 - params))
-        
-        # 缓存常用值 (open, close, high, low)
-        open_price = stock_data_tuple[0]
-        low_price = stock_data_tuple[3]
-        is_debug=self.debug
-        if open_price <= trailing_stop_price:
-            if is_debug:
-                return True, open_price, f"开盘价{open_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params:.2%}),以开盘价{open_price/100:.2f}卖出"
-            return True, open_price, EMPTY_STRING
-        elif low_price <= trailing_stop_price:
-            if is_debug:
-                return True, trailing_stop_price, f"盘中最低价{low_price/100:.2f}<=移动止盈价{trailing_stop_price/100:.2f}(最高{hold.highest_price/100:.2f}回撤{params:.2%}),以移动止盈价{trailing_stop_price/100:.2f}卖出"
-            return True, trailing_stop_price, EMPTY_STRING
-        
-        return False, 0, EMPTY_STRING
-
-    def time_based_sell(self, hold: HoldStock, stock_data_tuple: tuple, params: int) -> tuple[bool, int, str]:
-        """
-        时间止盈策略：持有指定天数后卖出
-        params: 持有天数
-        """
-        # 计算持仓天数
-        hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        # 缓存常用值 (open, close, high, low)
-        open_price = stock_data_tuple[0]
-        is_debug=self.debug
-        # 如果持仓天数达到指定天数，以开盘价卖出
-        if hold_days >= params:
-            if is_debug:
-                return True, open_price, f"持仓{hold_days}天达到时间止盈阈值{params}天，以开盘价{open_price/100:.2f}卖出"
-            return True, open_price, EMPTY_STRING
         return False, 0, EMPTY_STRING
 
     def settle_amount(self) -> None:
