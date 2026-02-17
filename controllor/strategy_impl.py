@@ -19,9 +19,12 @@ SORT_FIELD_MAP = {
 
 
 @njit(cache=True)
-def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_20d,
-                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min):
-    """Numba JIT 编译的筛选函数"""
+def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_15d, limit_up_count_20d, limit_up_count_30d,
+                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_idx, limit_up_count_min):
+    """Numba JIT 编译的筛选函数
+    limit_up_count_idx: 0=15天, 1=20天, 2=30天
+    limit_up_count_min: 涨停次数最低要求，0表示不限制
+    """
     n = len(up_days)
     result = np.empty(n, dtype=np.bool_)
     for i in range(n):
@@ -30,9 +33,14 @@ def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_20d,
                    change_3d[i] > buy_day3_min and
                    change_5d[i] > buy_day5_min and
                    change_pct[i] < change_pct_max)
-        # 20天涨停次数条件（0表示不限制）
+        # 涨停次数条件（0表示不限制）
         if limit_up_count_min > 0:
-            result[i] = base_ok and (limit_up_count_20d[i] >= limit_up_count_min)
+            if limit_up_count_idx == 0:
+                result[i] = base_ok and (limit_up_count_15d[i] >= limit_up_count_min)
+            elif limit_up_count_idx == 1:
+                result[i] = base_ok and (limit_up_count_20d[i] >= limit_up_count_min)
+            else:
+                result[i] = base_ok and (limit_up_count_30d[i] >= limit_up_count_min)
         else:
             result[i] = base_ok
     return result
@@ -63,7 +71,8 @@ class UpStrategy(Strategy):
         buy_day3_min = self.buy_param_arr[1]
         buy_day5_min = self.buy_param_arr[2]
         change_pct_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else 5  # 当日涨幅上限，默认5%
-        limit_up_count_min = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else 0  # 20天内涨停次数最低要求，0表示不限制
+        limit_up_count_idx = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else 1  # 涨停天数选择: 0=15天,1=20天,2=30天
+        limit_up_count_min = self.buy_param_arr[5] if len(self.buy_param_arr) > 5 else 0  # 涨停次数最低要求，0表示不限制
 
         def filter_func(numpy_data: dict):
             mask = _filter_numba(
@@ -71,8 +80,10 @@ class UpStrategy(Strategy):
                 numpy_data['change_3d'],
                 numpy_data['change_5d'],
                 numpy_data['change_pct'],
+                numpy_data['limit_up_count_15d'],
                 numpy_data['limit_up_count_20d'],
-                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min
+                numpy_data['limit_up_count_30d'],
+                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_idx, limit_up_count_min
             )
             return mask
         self._pick_filter = filter_func

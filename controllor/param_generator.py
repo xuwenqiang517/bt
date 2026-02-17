@@ -9,37 +9,35 @@ class ParamGenerator:
     """参数生成器 - 支持动态生成和分片"""
 
     def __init__(self):
-        # 基础参数范围 - 根据历史结果优化
-        self.hold_count_range = [2, 3, 4, 5, 7, 10]            # 持仓数量: 2-5只便于操作，7-10只参考高收益
-        self.buy_first_range = [0, 1]                          # 买卖顺序: 先卖后买可能提高资金利用率
-        self.position_mode_range = [0, 1]                      # 仓位模式: 主要测试剩余均分和固定比例
-        self.position_value_range = [0, 15, 20, 25]            # 仓位值: 15-25%比例较合理
+        # 基础参数范围
+        self.hold_count_range = [2, 3]                         # 持仓数量: 2-3只
+        self.position_value_range = [25, 30, 35, 40, 45, 50]   # 仓位比例: 25-50%，精细测试
 
-        # 买入参数范围 - 根据100%胜率策略特征优化
-        self.buy_up_day_range = [2, 3, 4]                      # 连涨天数: 2-4天，4天表现最好
-        self.buy_day3_range = [3, 8, 13]                       # 3日涨幅: 3,8,13，13出现频率高
-        self.buy_day5_range = [8, 13, 18]                      # 5日涨幅: 8,13,18，13和18表现好
-        self.change_pct_max_range = [3, 5, 7]                  # 当日涨幅上限: 3-7%，3出现频率最高
-        self.limit_up_count_min_range = [0, 1]                 # 涨停次数: 0或1次，0表现更好
-        self.sort_field_range = [3, 4, 5]                      # 排序字段: 5日涨幅、连续上涨天数、成交量
-        self.sort_desc_range = [0, 1]                          # 排序方式: 0=升序, 1=降序
+        # 买入参数范围 - 扩大范围精细测试
+        self.buy_up_day_range = [1, 2, 3, 4, 5]                # 连涨天数: 1-5天
+        self.buy_day3_range = [3, 5, 8, 10, 13, 15]            # 3日涨幅: 3-15%，更细粒度
+        self.buy_day5_range = [3, 5, 8, 10, 13, 15, 18, 20]    # 5日涨幅: 3-20%，更细粒度
+        self.change_pct_max_range = [2, 3, 4, 5, 6, 7]         # 当日涨幅上限: 2-7%
+        self.limit_up_count_idx_range = [0, 1, 2]              # 涨停天数选择: 0=15天, 1=20天, 2=30天
+        self.limit_up_count_min_range = [0, 1, 2]              # 涨停次数: 0-2次
+        self.sort_field_range = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 排序字段: 全字段测试
+        self.sort_desc_range = [0, 1]                          # 排序方式: 升序/降序
 
-        # 卖出参数范围 - 根据结果优化
-        self.sell_stop_loss_range = list(range(-20, -12, 1))   # 止损率: -20到-13，-15到-20表现好
-        self.sell_hold_days_range = [2, 3, 4]                  # 持仓天数: 2-4天，2天表现最好
-        self.sell_target_return_range = [5, 6, 7, 8, 9]        # 目标涨幅: 5-9%，5-6表现好
-        self.sell_trailing_range = [3, 8, 13, 18]              # 回撤率: 3,8,13,18，3和8出现频率高
+        # 卖出参数范围 - 扩大范围精细测试
+        self.sell_stop_loss_range = list(range(-25, -8, 1))    # 止损率: -25到-9%，更宽范围
+        self.sell_hold_days_range = [1, 2, 3, 4, 5]            # 持仓天数: 1-5天
+        self.sell_target_return_range = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15]  # 目标涨幅: 3-15%
+        self.sell_trailing_range = [2, 3, 4, 5, 8, 10, 13, 15, 18, 20]     # 回撤率: 2-20%
 
-        # 计算总组合数
+        # 计算总组合数（去掉固定的2个参数）
         self.total_count = (
             len(self.hold_count_range) *
-            len(self.buy_first_range) *
-            len(self.position_mode_range) *
             len(self.position_value_range) *
             len(self.buy_up_day_range) *
             len(self.buy_day3_range) *
             len(self.buy_day5_range) *
             len(self.change_pct_max_range) *
+            len(self.limit_up_count_idx_range) *
             len(self.limit_up_count_min_range) *
             len(self.sort_field_range) *
             len(self.sort_desc_range) *
@@ -57,13 +55,12 @@ class ParamGenerator:
         """将索引转换为参数组合"""
         ranges = [
             self.hold_count_range,
-            self.buy_first_range,
-            self.position_mode_range,
             self.position_value_range,
             self.buy_up_day_range,
             self.buy_day3_range,
             self.buy_day5_range,
             self.change_pct_max_range,
+            self.limit_up_count_idx_range,
             self.limit_up_count_min_range,
             self.sort_field_range,
             self.sort_desc_range,
@@ -82,20 +79,21 @@ class ParamGenerator:
         indices.reverse()
 
         hold_count = self.hold_count_range[indices[0]]
-        buy_first = self.buy_first_range[indices[1]]
-        position_mode = self.position_mode_range[indices[2]]
-        position_value = self.position_value_range[indices[3]]
-        buy1 = self.buy_up_day_range[indices[4]]
-        buy2 = self.buy_day3_range[indices[5]]
-        buy3 = self.buy_day5_range[indices[6]]
-        buy4 = self.change_pct_max_range[indices[7]]
-        buy5 = self.limit_up_count_min_range[indices[8]]
-        sort_field = self.sort_field_range[indices[9]]
-        sort_desc = self.sort_desc_range[indices[10]]
-        sell1 = self.sell_stop_loss_range[indices[11]]
-        sell2 = self.sell_hold_days_range[indices[12]]
-        sell3 = self.sell_target_return_range[indices[13]]
-        sell4 = self.sell_trailing_range[indices[14]]
+        buy_first = 0       # 固定先卖后买
+        position_mode = 1   # 固定比例模式
+        position_value = self.position_value_range[indices[1]]
+        buy1 = self.buy_up_day_range[indices[2]]
+        buy2 = self.buy_day3_range[indices[3]]
+        buy3 = self.buy_day5_range[indices[4]]
+        buy4 = self.change_pct_max_range[indices[5]]
+        buy5 = self.limit_up_count_idx_range[indices[6]]   # 涨停天数选择
+        buy6 = self.limit_up_count_min_range[indices[7]]   # 涨停次数
+        sort_field = self.sort_field_range[indices[8]]
+        sort_desc = self.sort_desc_range[indices[9]]
+        sell1 = self.sell_stop_loss_range[indices[10]]
+        sell2 = self.sell_hold_days_range[indices[11]]
+        sell3 = self.sell_target_return_range[indices[12]]
+        sell4 = self.sell_trailing_range[indices[13]]
 
         # 转换仓位值：固定金额模式时，将万转换为分
         if position_mode == 2 and position_value > 0:
@@ -105,7 +103,7 @@ class ParamGenerator:
 
         return {
             "base_param_arr": [10000000, hold_count, buy_first, position_mode, position_value_converted],
-            "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
+            "buy_param_arr": [buy1, buy2, buy3, buy4, buy5, buy6],
             "pick_param_arr": [sort_field, sort_desc],
             "sell_param_arr": [sell1, sell2, sell3, sell4],
             "debug": 0

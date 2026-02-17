@@ -73,17 +73,19 @@ def str2dict(strategy_params):
     pick_arr = parts[2] if len(parts) > 2 else "0,1"
     sell_arr = parts[3] if len(parts) > 3 else "-15,2,8,3"
 
-    # 解析基础参数，兼容旧格式（1个参数）和新格式（4个参数）
+    # 解析基础参数，新格式：持仓数量,仓位比例（买卖顺序和仓位模式已固定）
     base_params = list(map(int, base_arr.split(",")))
     hold_count = base_params[0]
-    buy_first = base_params[1] if len(base_params) > 1 else 1  # 1=先买后卖
-    position_mode = base_params[2] if len(base_params) > 2 else 0  # 0=剩余均分
-    position_value = base_params[3] if len(base_params) > 3 else 0  # 比例或金额
+    position_value = base_params[1] if len(base_params) > 1 else 30  # 仓位比例，默认30%
+    buy_first = 0  # 固定先卖后买
+    position_mode = 1  # 固定比例模式
 
-    # 解析买入参数，兼容旧格式（3个参数）和新格式（5个参数）
+    # 解析买入参数，新格式6个参数：连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停天数选择,涨停次数
     buy_params = list(map(int, buy_arr.split(",")))
-    if len(buy_params) == 3:
-        buy_params.extend([5, 0])
+    if len(buy_params) < 6:
+        # 补齐默认值
+        defaults = [2, 8, 8, 3, 1, 0]  # 连涨2天,3日8%,5日8%,涨幅上限3%,20天,0次涨停
+        buy_params.extend(defaults[len(buy_params):])
 
     strategy_params_list = []
     strategy_params_list.append({
@@ -113,15 +115,14 @@ def bt_one(strategy_params, day_array):
 
 if __name__ == "__main__":
     s = """
-    9|4,3,13,3,0|3,1|-20,2,5,3
+    2,0,1,40|2,8,8,3,1|5,0|-20,2,5,3
     """
 
     bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
-    # bt_one(s,[[20260201,202602012]])
-    bt_one(s,[[20250101,20260101]])
+    # bt_one(s,[[20250101,20260101]])
     
 
 # /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py

@@ -137,6 +137,8 @@ class Chain:
 
                 if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
+                    # 被过滤的策略不加入结果列表
+                    continue
                 results.append(result)
 
             if failure_count > fail_count and not is_debug:
@@ -146,9 +148,20 @@ class Chain:
             successful_count=total_count-failure_count
             actual_win_rate = successful_count / total_count if results else 0
 
-            cache_key = "|".join(",".join(map(str, arr)) for arr in [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
-            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key)
-            print(new_row)
+            # 跑年连续周期 20250101-20260101
+            year_result = None
+            try:
+                year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+            except Exception as e:
+                print(f"年周期执行失败: {e}")
+
+            # 构建配置字符串：只保留可调整参数（持仓数量,仓位比例|买入参数|排序参数|卖出参数）
+            base_arr = params.get('base_param_arr')
+            # 持仓数量,仓位比例（去掉固定的买卖顺序和仓位模式）
+            base_config = [base_arr[1], base_arr[4] // 1000000 if base_arr[4] > 10000 else base_arr[4]]
+            cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
+            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
+            # print(new_row)
             if is_debug:
                 if 'new_row' in locals():
                     print(f"进程 {thread_id}: {new_row}")
@@ -179,6 +192,12 @@ class Chain:
             '最小资金': pl.Series([], dtype=pl.Float64),
             '夏普比率': pl.Series([], dtype=pl.Float64),
             '平均资金使用率': pl.Series([], dtype=pl.String),
+            '年周期收益率': pl.Series([], dtype=pl.String),
+            '年周期胜率': pl.Series([], dtype=pl.String),
+            '年周期夏普': pl.Series([], dtype=pl.Float64),
+            '年最大资金': pl.Series([], dtype=pl.Float64),
+            '年最小资金': pl.Series([], dtype=pl.Float64),
+            '年交易次数': pl.Series([], dtype=pl.Float64),
             '配置': pl.Series([], dtype=pl.String)
         })
     
@@ -194,8 +213,10 @@ class Chain:
     
     def _merge_and_sort_data(self, target_df: pl.DataFrame, new_df: pl.DataFrame) -> pl.DataFrame:
         """合并数据并排序"""
-        # 确保必要的列存在
-        for col in ['平均交易次数', '平均资金使用率']:
+        # 确保必要的列存在（兼容旧缓存文件）
+        required_cols = ['平均交易次数', '平均资金使用率', '年周期收益率', '年周期胜率', 
+                        '年周期夏普', '年最大资金', '年最小资金', '年交易次数']
+        for col in required_cols:
             if col not in target_df.columns:
                 target_df = target_df.with_columns(pl.lit(None).alias(col))
         
@@ -205,22 +226,22 @@ class Chain:
         return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """排序DataFrame，优先按周期胜率排序"""
-        # 先添加临时列，提取周期胜率和平均胜率的数值用于排序
+        """排序DataFrame，优先周期胜率，其次平均胜率"""
+        # 先添加临时列，提取周期胜率和平均胜率数值用于排序
         df = df.with_columns([
             pl.col('周期胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('周期胜率数值'),
             pl.col('平均胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('平均胜率数值')
         ])
-        # 按照周期胜率数值、平均收益率排序（平均胜率优先级降低）
+        # 按周期胜率优先，其次平均胜率排序
         df = df.sort(
-            by=['周期胜率数值', '平均收益率', '平均胜率数值'],
-            descending=[True, True, True]
+            by=['周期胜率数值', '平均胜率数值'],
+            descending=[True, True]
         )
         # 删除临时列
         df = df.drop(['周期胜率数值', '平均胜率数值'])
         return df
     
-    def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str) -> dict:
+    def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str, year_result: object = None) -> dict:
         """创建新的行数据"""
         if not results:
             # 当results为空时，返回默认值
@@ -233,11 +254,17 @@ class Chain:
                 "最小资金": 0.0,
                 "夏普比率": 0.0,
                 "平均资金使用率": "0.00%",
+                "年周期收益率": "0.00%",
+                "年周期胜率": "0%",
+                "年周期夏普": 0.0,
+                "年最大资金": 0.0,
+                "年最小资金": 0.0,
+                "年交易次数": 0.0,
                 "配置": cache_key
             }
-        
+
         # 当results不为空时，计算各项指标
-        return {
+        base_result = {
             "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
             "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
             "平均收益率": f"{np.mean([x.总收益率 for x in results]) * 100:.2f}%",
@@ -248,6 +275,28 @@ class Chain:
             "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in results]) * 100:.2f}%",
             "配置": cache_key
         }
+
+        # 年周期统计（如果有的话）
+        if year_result:
+            base_result.update({
+                "年周期收益率": f"{year_result.总收益率 * 100:.2f}%",
+                "年周期胜率": f"{int(year_result.胜率 * 100)}%",
+                "年周期夏普": float(round(year_result.夏普比率, 2)),
+                "年最大资金": float(round(year_result.最大资金, 1)),
+                "年最小资金": float(round(year_result.最小资金, 1)),
+                "年交易次数": float(year_result.交易次数)
+            })
+        else:
+            base_result.update({
+                "年周期收益率": "0.00%",
+                "年周期胜率": "0%",
+                "年周期夏普": 0.0,
+                "年最大资金": 0.0,
+                "年最小资金": 0.0,
+                "年交易次数": 0.0
+            })
+
+        return base_result
     
     def _merge_thread_caches(self) -> None:
         """合并所有进程的缓存文件"""
@@ -409,15 +458,23 @@ class Chain:
         if self.processor_count == 1:
             # 单进程时直接在当前进程执行
             print(f"单进程模式，直接在当前进程执行")
-            start_idx, end_idx = self.param_generator.get_worker_slice(0, 1)
-            self._process_strategy_generator(0, start_idx, end_idx)
+            self._process_strategy_generator(0, 0, total_strategies)
         else:
             # 多进程时，主进程处理第一组，其余由子进程处理
             print(f"多进程模式，主进程处理一组，创建 {self.processor_count - 1} 个子进程")
 
+            # 基于限制后的总策略数计算每个进程的任务量
+            base_size = total_strategies // self.processor_count
+            remainder = total_strategies % self.processor_count
+
             # 创建并启动子进程处理剩余组
             for i in range(1, self.processor_count):
-                start_idx, end_idx = self.param_generator.get_worker_slice(i, self.processor_count)
+                if i < remainder:
+                    start_idx = i * (base_size + 1)
+                    end_idx = start_idx + base_size + 1
+                else:
+                    start_idx = remainder * (base_size + 1) + (i - remainder) * base_size
+                    end_idx = start_idx + base_size
                 process_name = f"ChainProcess-{i}"
                 process = multiprocessing.Process(
                     target=self._process_strategy_generator_worker,
@@ -429,7 +486,10 @@ class Chain:
                 print(f"启动进程: {process_name}，处理策略数: {end_idx - start_idx}")
 
             # 主进程处理第一组
-            start_idx, end_idx = self.param_generator.get_worker_slice(0, self.processor_count)
+            if remainder > 0:
+                start_idx, end_idx = 0, base_size + 1
+            else:
+                start_idx, end_idx = 0, base_size
             self._process_strategy_generator(0, start_idx, end_idx)
 
             # 等待所有子进程完成
@@ -477,10 +537,15 @@ class Chain:
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
 
-                if result.总收益率 <= 0:
+                # 过滤条件：收益率为负 或 最大回撤超过20%（最小资金<初始资金80%）
+                init_amount = params.get('base_param_arr')[0]
+                max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
+
+                if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
                     if failure_count > fail_count and not is_debug:
                         break
+                    continue
                 results.append(result)
 
             if failure_count > fail_count and not is_debug:
@@ -489,9 +554,18 @@ class Chain:
             successful_count = total_count - failure_count
             actual_win_rate = successful_count / total_count if results else 0
 
-            cache_key = "|".join(",".join(map(str, arr)) for arr in
-                              [[params.get('base_param_arr')[1]], params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
-            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key)
+            # 跑年连续周期 20250101-20260101
+            year_result = None
+            try:
+                year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+            except Exception as e:
+                print(f"年周期执行失败: {e}")
+
+            # 构建配置字符串：只保留可调整参数（持仓数量,仓位比例|买入参数|排序参数|卖出参数）
+            base_arr = params.get('base_param_arr')
+            base_config = [base_arr[1], base_arr[4] // 1000000 if base_arr[4] > 10000 else base_arr[4]]
+            cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
+            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
             print(new_row)
 
             if is_debug:

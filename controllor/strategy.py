@@ -23,6 +23,64 @@ def _filter_buy_mask(codes, buy_counts, hold_codes_arr):
                     break
     return result
 
+
+@njit(cache=True)
+def _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr, base_amount):
+    """Numba JIT 编译的买入股数计算函数 - 固定比例模式
+    base_amount: 固定买入金额（分）
+    """
+    n = len(codes)
+    buy_counts = np.zeros(n, dtype=np.int64)
+
+    for i in range(n):
+        # 跳过涨停股票
+        if price_limit_status[i] == 1:
+            continue
+
+        # 检查是否已持仓
+        already_hold = False
+        for j in range(len(hold_codes_arr)):
+            if codes[i] == hold_codes_arr[j]:
+                already_hold = True
+                break
+        if already_hold:
+            continue
+
+        # 计算股数（100股整数倍）
+        buy_counts[i] = base_amount // next_opens[i] // 100 * 100
+
+    return buy_counts
+
+
+@njit(cache=True)
+def _check_sell_numba(buy_price, highest_price, hold_days,
+                      open_price, close_price, high_price, low_price,
+                      stop_loss_price, target_return_price, trailing_stop_price,
+                      hold_days_limit):
+    """Numba JIT 编译的卖出检查函数
+    返回: (need_sell, sell_price)
+    """
+    # 1. 止损检查（开盘价或最低价触及止损价）
+    if open_price <= stop_loss_price:
+        return True, open_price
+    if low_price <= stop_loss_price:
+        return True, stop_loss_price
+
+    # 2. 贪婪止盈
+    if hold_days <= hold_days_limit:
+        # 持仓天数内未达标，卖出
+        if close_price < target_return_price:
+            return True, open_price
+    else:
+        # 移动止盈
+        if highest_price > 0:
+            if open_price <= trailing_stop_price:
+                return True, open_price
+            if low_price <= trailing_stop_price:
+                return True, trailing_stop_price
+
+    return False, 0
+
 # 全局常量
 EMPTY_STRING = ""
 
@@ -55,6 +113,12 @@ class Strategy:
         self.buy_first = base_param_arr[2] if len(base_param_arr) > 2 else 1  # 1=先买后卖, 0=先卖后买
         self.position_mode = base_param_arr[3] if len(base_param_arr) > 3 else 0  # 0=剩余均分, 1=固定比例, 2=固定金额
         self.position_value = base_param_arr[4] if len(base_param_arr) > 4 else 0  # 比例(%)或金额(分)
+        # 预计算卖出参数（避免每次重复计算）
+        stop_loss_rate, hold_days_limit, target_return, trailing_rate = sell_param_arr
+        self._stop_loss_rate = stop_loss_rate / 100.0
+        self._hold_days_limit = hold_days_limit
+        self._target_return = target_return / 100.0
+        self._trailing_rate = trailing_rate / 100.0
         self.data = None
         self.calendar = None
         self.debug = debug
@@ -172,19 +236,6 @@ class Strategy:
             print(f"日期 {today} 选出股票 {len(sorted_indices)} 只")
     
 
-    def _calc_buy_amount_per_stock(self, free_amount: int, remaining_hold_count: int, next_open: int) -> int:
-        """计算每只股票买入金额（分）"""
-        if self.position_mode == 1:
-            # 固定比例模式：总资金的固定百分比
-            amount = int(self.init_amount * self.position_value / 100)
-        elif self.position_mode == 2:
-            # 固定金额模式：每只票固定金额
-            amount = self.position_value
-        else:
-            # 默认：剩余资金平均分配
-            amount = free_amount // remaining_hold_count
-        return amount
-
     def buy(self) -> None:
         """执行买入操作"""
         numpy_data = self.picked_numpy_data
@@ -206,19 +257,16 @@ class Strategy:
         codes = numpy_data['code']
         next_opens = numpy_data['next_open']
         price_limit_status = numpy_data['price_limit_status']
-
-        # 过滤涨停股票
-        limit_up_mask = price_limit_status != 1
         hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
 
-        # 计算每只票的买入股数
-        buy_counts = np.zeros(len(codes), dtype=np.int64)
-        for i in range(len(codes)):
-            if limit_up_mask[i]:
-                amount = self._calc_buy_amount_per_stock(free_amount, remaining_hold_count, next_opens[i])
-                buy_counts[i] = amount // next_opens[i] // 100 * 100
+        # 预计算固定买入金额（固定比例模式）
+        base_amount = int(self.init_amount * self.position_value / 100)
 
-        valid_mask = _filter_buy_mask(codes, buy_counts, hold_codes_arr) & limit_up_mask
+        # 使用 Numba 计算买入股数（包含涨停过滤和持仓检查）
+        buy_counts = _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr, base_amount)
+
+        # 过滤有效买入（股数>0）
+        valid_mask = buy_counts > 0
         valid_codes = codes[valid_mask]
         valid_opens = next_opens[valid_mask]
         valid_counts = buy_counts[valid_mask]
@@ -229,8 +277,6 @@ class Strategy:
             code = int(valid_codes[i])
             next_open = int(valid_opens[i])
             buy_count = int(valid_counts[i])
-            if buy_count <= 0:
-                continue
             hold_stock = HoldStock(code, next_open, buy_count, today)
             self._add_hold(hold_stock)
             cost_cents = buy_count * next_open
@@ -270,11 +316,8 @@ class Strategy:
                     print(f"日期 {today} 股票 {code} 跌停,无法卖出")
                 continue
 
-            stock_data_tuple = (stock_data_dict['open'], stock_data_dict['close'],
-                               stock_data_dict['high'], stock_data_dict['low'])
-
             # 调用统一的卖出策略
-            need_sell, sell_price, reason = self._check_sell(hold_stock, stock_data_tuple)
+            need_sell, sell_price, reason = self._check_sell(hold_stock, stock_data_dict)
             if is_debug:
                 buy_price = hold_stock.buy_price
                 reason = f"\033[91m{reason}\033[0m" if sell_price > buy_price else f"\033[92m{reason}\033[0m"
@@ -320,56 +363,51 @@ class Strategy:
                     print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {free_amount:.2f}")
                 
 
-    def _check_sell(self, hold: HoldStock, stock_data_tuple: tuple) -> tuple[bool, int, str]:
+    def _check_sell(self, hold: HoldStock, stock_data_dict: dict) -> tuple[bool, int, str]:
         """
         统一卖出策略：止损 + 贪婪止盈
-        sell_param_arr: [止损率, 持仓天数, 目标涨幅, 回撤率]
+        使用Numba加速核心计算
         """
-        stop_loss_rate, hold_days_limit, target_return, trailing_rate = self.sell_param_arr
-        stop_loss_rate = stop_loss_rate / 100.0
-        target_return = target_return / 100.0
-        trailing_rate = trailing_rate / 100.0
-
-        open_price, close_price, high_price, low_price = stock_data_tuple
-        buy_price = hold.buy_price
         is_debug = self.debug
 
-        # 1. 止损检查
-        stop_loss_price = int(buy_price * (1 + stop_loss_rate))
-        if open_price <= stop_loss_price:
-            if is_debug:
-                return True, open_price, f"止损：开盘价{open_price/100:.2f}<=止损价{stop_loss_price/100:.2f}({abs(stop_loss_rate):.2%})"
-            return True, open_price, EMPTY_STRING
-        if low_price <= stop_loss_price:
-            if is_debug:
-                return True, stop_loss_price, f"止损：最低价{low_price/100:.2f}<=止损价{stop_loss_price/100:.2f}"
-            return True, stop_loss_price, EMPTY_STRING
+        # 提取数据
+        open_price = stock_data_dict['open']
+        close_price = stock_data_dict['close']
+        high_price = stock_data_dict['high']
+        low_price = stock_data_dict['low']
+        buy_price = hold.buy_price
+        highest_price = hold.highest_price
 
-        # 2. 贪婪止盈
-        current_hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
-        overall_return = (close_price - buy_price) / buy_price
-        actual_return = (open_price - buy_price) / buy_price
+        # 预计算关键价格
+        stop_loss_price = int(buy_price * (1 + self._stop_loss_rate))
+        target_return_price = int(buy_price * (1 + self._target_return))
+        trailing_stop_price = int(highest_price * (1 - self._trailing_rate)) if highest_price > 0 else 0
 
-        if current_hold_days <= hold_days_limit:
-            # 持仓天数内未达标，卖出
-            if overall_return < target_return:
-                if is_debug:
-                    return True, open_price, f"未达标：持仓{current_hold_days}天 涨幅{actual_return:.2%}<目标{target_return:.2%}"
-                return True, open_price, EMPTY_STRING
-        else:
-            # 移动止盈
-            if hold.highest_price > 0:
-                stop_price = int(hold.highest_price * (1 - trailing_rate))
-                if open_price <= stop_price:
-                    if is_debug:
-                        return True, open_price, f"移动止盈：开盘价{open_price/100:.2f}<=止盈价{stop_price/100:.2f}"
-                    return True, open_price, EMPTY_STRING
-                if low_price <= stop_price:
-                    if is_debug:
-                        return True, stop_price, f"移动止盈：最低价{low_price/100:.2f}<=止盈价{stop_price/100:.2f}"
-                    return True, stop_price, EMPTY_STRING
+        # 获取持仓天数
+        hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
 
-        return False, 0, EMPTY_STRING
+        # 使用Numba进行核心计算
+        need_sell, sell_price = _check_sell_numba(
+            buy_price, highest_price, hold_days,
+            open_price, close_price, high_price, low_price,
+            stop_loss_price, target_return_price, trailing_stop_price,
+            self._hold_days_limit
+        )
+
+        if not need_sell:
+            return False, 0, EMPTY_STRING
+
+        # 生成原因字符串（仅在debug模式）
+        if is_debug:
+            if sell_price == stop_loss_price:
+                reason = f"止损：触及止损价{stop_loss_price/100:.2f}"
+            elif hold_days <= self._hold_days_limit:
+                reason = f"未达标：持仓{hold_days}天"
+            else:
+                reason = f"移动止盈：触及止盈价{trailing_stop_price/100:.2f}"
+            return True, sell_price, reason
+
+        return True, sell_price, EMPTY_STRING
 
     def settle_amount(self) -> None:
         """计算每日总资产并记录"""
@@ -476,7 +514,7 @@ class Strategy:
             winning_trades = sum(1 for t in trades_history if t['profit'] > 0)
             win_rate = winning_trades / trade_count
 
-        # 计算资金使用率（每日持仓市值 / 总资产）
+        # 计算资金使用率（每日持仓市值 / 总资产），限制在0-100%之间
         avg_utilization = 0
         if daily_values:
             utilization_sum = 0
@@ -484,7 +522,9 @@ class Strategy:
             for dv in daily_values:
                 value = dv['value']
                 if value > 0:
-                    utilization = (value - dv['free_amount']) / value
+                    # 持仓市值 = 总资产 - 可用资金，但可用资金可能为负（透支）
+                    hold_value = max(0, value - dv['free_amount'])
+                    utilization = min(hold_value / value, 1.0)  # 限制最大100%
                     utilization_sum += utilization
                     count += 1
             if count > 0:

@@ -70,8 +70,10 @@ class StockData:
                     values=self.calc_up_days(df["close"].to_numpy()),  # 转为numpy数组适配原函数
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
                 ),
-                # 计算limit_up_count_20d：20天内涨停次数（涨幅>=9.9%）
-                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=20).cast(pl.Int8).alias("limit_up_count_20d")
+                # 计算15/20/30天内涨停次数（涨幅>=9.9%）
+                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=15).cast(pl.Int8).alias("limit_up_count_15d"),
+                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=20).cast(pl.Int8).alias("limit_up_count_20d"),
+                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=30).cast(pl.Int8).alias("limit_up_count_30d")
             ]).drop(["ma5_vol", "ma10_vol"]).collect()
         
         return df_tech
@@ -104,7 +106,9 @@ class StockData:
                 'change_3d': group['change_3d'].to_numpy(),
                 'change_5d': group['change_5d'].to_numpy(),
                 'change_pct': group['change_pct'].to_numpy(),
+                'limit_up_count_15d': group['limit_up_count_15d'].to_numpy(),
                 'limit_up_count_20d': group['limit_up_count_20d'].to_numpy(),
+                'limit_up_count_30d': group['limit_up_count_30d'].to_numpy(),
                 'amount': group['amount'].to_numpy(),
                 '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
             }
