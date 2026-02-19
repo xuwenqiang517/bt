@@ -120,11 +120,11 @@ if __name__ == "__main__":
     2|2,8,-1,2,2,2|0,1|-15,2,4,2
     """
 
-    # bt_all(processor_count=8, fail_count=0, strategy_params=None, max_strategy_count=1000000000)
+    bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
-    bt_one(s,[[20250101,20260101]])
+    # bt_one(s,[[20250101,20260101]])
     
 
 # /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py

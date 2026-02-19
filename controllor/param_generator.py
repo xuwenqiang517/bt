@@ -10,31 +10,36 @@ class ParamGenerator:
 
     def __init__(self):
         # 基础参数范围 - 动态仓位，只保留持仓数量
-        self.hold_count_range = [2, 3]                         # 持仓数量: 2-3只
+        # 扩大持仓数量范围
+        self.hold_count_range = [2, 3, 4, 5]                   # 持仓数量: 2-5只
 
-        # 买入参数范围 - 根据回测结果优化，支持-1表示禁用
-        # 连涨天数: 1天(62%)、2天(37%)有效，3天极少，保留1-3天+禁用
-        self.buy_up_day_range = [-1, 1, 2, 3]
-        # 3日涨幅: 10%(30%)、5%(27%)、3%(24%)、8%(15%)有效
-        self.buy_day3_range = [-1, 3, 5, 8, 10]
-        # 5日涨幅: 3%(39%)、5%(32%)、8%(20%)有效
-        self.buy_day5_range = [-1, 3, 5, 8]
-        # 当日涨幅上限: 2%(47%)、3%(32%)、4%(21%)有效
-        self.change_pct_max_range = [-1, 2, 3, 4]
-        # 涨停天数: 15天(42%)、20天(32%)、30天(27%)都有效
-        self.limit_up_count_idx_range = [0, 1, 2]
-        # 涨停次数: 1次(40%)、0次(37%)、2次(23%)有效
-        self.limit_up_count_min_range = [-1, 0, 1, 2]
-        # 排序字段: 20日涨幅(49%)绝对主导，保留前几个有效的
-        self.sort_field_range = [0, 4, 5, 6, 7]
-        # 排序方式: 升序(64%)多于降序(36%)
+        # 买入参数范围 - 大幅扩展
+        # 连涨天数: 扩大范围
+        self.buy_up_day_range = [-1, 1, 2, 3, 4, 5]
+        # 3日涨幅: 大幅扩展
+        self.buy_day3_range = [-1, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20]
+        # 5日涨幅: 大幅扩展
+        self.buy_day5_range = [-1, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20]
+        # 当日涨幅上限: 大幅扩展
+        self.change_pct_max_range = [-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # 涨停天数: 扩展
+        self.limit_up_count_idx_range = [0, 1, 2, 3, 4]
+        # 涨停次数: 扩展
+        self.limit_up_count_min_range = [-1, 0, 1, 2, 3, 4, 5]
+        # 排序字段: 扩展全部字段
+        self.sort_field_range = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        # 排序方式: 升序降序
         self.sort_desc_range = [0, 1]
 
-        # 卖出参数 - 丰富参数范围（止损率合理范围-8%到-15%）
-        self.sell_stop_loss_range = [-8, -10, -12, -15]   # 止损率: -8%, -10%, -12%, -15%
-        self.sell_hold_days_range = [2, 3]                # 持仓天数: 2天, 3天
-        self.sell_target_return_range = [3, 4, 5, 6]      # 目标涨幅: 3%, 4%, 5%, 6%
-        self.sell_trailing_range = [2, 3, 4]              # 回撤率: 2%, 3%, 4%
+        # 卖出参数 - 大幅扩展
+        # 止损率: 扩展范围
+        self.sell_stop_loss_range = [-5, -8, -10, -12, -15, -20]
+        # 持仓天数: 扩展
+        self.sell_hold_days_range = [1, 2, 3, 4, 5]
+        # 目标涨幅: 大幅扩展
+        self.sell_target_return_range = [2, 3, 4, 5, 6, 7, 8, 10]
+        # 回撤率: 扩展
+        self.sell_trailing_range = [1, 2, 3, 4, 5, 6]
 
         # 计算总组合数（动态仓位，去掉position_value参数）
         self.total_count = (
