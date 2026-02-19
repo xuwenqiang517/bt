@@ -9,9 +9,8 @@ class ParamGenerator:
     """参数生成器 - 支持动态生成和分片"""
 
     def __init__(self):
-        # 基础参数范围 - 根据回测结果优化
-        self.hold_count_range = [2, 3]                         # 持仓数量: 2-3只（结果全是2只，保留3只验证）
-        self.position_value_range = [25, 30, 35, 40]           # 仓位比例: 25-40%（结果全是25%，扩大范围验证）
+        # 基础参数范围 - 动态仓位，只保留持仓数量
+        self.hold_count_range = [2, 3]                         # 持仓数量: 2-3只
 
         # 买入参数范围 - 根据回测结果优化，支持-1表示禁用
         # 连涨天数: 1天(62%)、2天(37%)有效，3天极少，保留1-3天+禁用
@@ -37,10 +36,9 @@ class ParamGenerator:
         self.sell_target_return_range = [3, 4, 5, 6]      # 目标涨幅: 3%, 4%, 5%, 6%
         self.sell_trailing_range = [2, 3, 4]              # 回撤率: 2%, 3%, 4%
 
-        # 计算总组合数（去掉固定的2个参数）
+        # 计算总组合数（动态仓位，去掉position_value参数）
         self.total_count = (
             len(self.hold_count_range) *
-            len(self.position_value_range) *
             len(self.buy_up_day_range) *
             len(self.buy_day3_range) *
             len(self.buy_day5_range) *
@@ -74,10 +72,9 @@ class ParamGenerator:
             self.sort_field_range,      # 排序字段
             self.sort_desc_range,       # 排序方式
         ]
-        # 基础参数（影响仓位）放中间
+        # 基础参数（影响仓位）放中间 - 动态仓位，只保留持仓数量
         base_ranges = [
             self.hold_count_range,      # 持仓数量
-            self.position_value_range,  # 仓位比例
         ]
         # 卖出参数（固定1个）放最后
         sell_ranges = [
@@ -107,26 +104,18 @@ class ParamGenerator:
         sort_field = self.sort_field_range[indices[6]]
         sort_desc = self.sort_desc_range[indices[7]]
 
-        # 基础参数（8-9）
+        # 基础参数（8）- 动态仓位，只保留持仓数量
         hold_count = self.hold_count_range[indices[8]]
-        position_value = self.position_value_range[indices[9]]
         buy_first = 0       # 固定先卖后买
-        position_mode = 1   # 固定比例模式
 
-        # 卖出参数（10-13）
-        sell1 = self.sell_stop_loss_range[indices[10]]
-        sell2 = self.sell_hold_days_range[indices[11]]
-        sell3 = self.sell_target_return_range[indices[12]]
-        sell4 = self.sell_trailing_range[indices[13]]
-
-        # 转换仓位值：固定金额模式时，将万转换为分
-        if position_mode == 2 and position_value > 0:
-            position_value_converted = position_value * 1000000  # 万->分
-        else:
-            position_value_converted = position_value
+        # 卖出参数（9-12）
+        sell1 = self.sell_stop_loss_range[indices[9]]
+        sell2 = self.sell_hold_days_range[indices[10]]
+        sell3 = self.sell_target_return_range[indices[11]]
+        sell4 = self.sell_trailing_range[indices[12]]
 
         return {
-            "base_param_arr": [10000000, hold_count, buy_first, position_mode, position_value_converted],
+            "base_param_arr": [10000000, hold_count, buy_first],
             "buy_param_arr": [buy1, buy2, buy3, buy4, buy5, buy6],
             "pick_param_arr": [sort_field, sort_desc],
             "sell_param_arr": [sell1, sell2, sell3, sell4],

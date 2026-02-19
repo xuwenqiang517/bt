@@ -7,6 +7,9 @@ from numba import njit
 
 from dto import *
 
+# 导入日志配置
+import logger_config
+
 @njit(cache=True)
 def _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr, base_amount):
     """Numba JIT 编译的买入股数计算函数 - 固定比例模式
@@ -92,10 +95,8 @@ class Strategy:
         self.buy_param_arr = buy_param_arr
         self.pick_param_arr = pick_param_arr if pick_param_arr else [0, 1]
         self.init_amount, self.max_hold_count = base_param_arr[0], base_param_arr[1]
-        # base_param_arr扩展参数：买卖顺序、仓位模式、仓位比例/金额
+        # base_param_arr扩展参数：买卖顺序
         self.buy_first = base_param_arr[2] if len(base_param_arr) > 2 else 1  # 1=先买后卖, 0=先卖后买
-        self.position_mode = base_param_arr[3] if len(base_param_arr) > 3 else 0  # 0=剩余均分, 1=固定比例, 2=固定金额
-        self.position_value = base_param_arr[4] if len(base_param_arr) > 4 else 0  # 比例(%)或金额(分)
         # 预计算卖出参数（避免每次重复计算）
         stop_loss_rate, hold_days_limit, target_return, trailing_rate = sell_param_arr
         self._stop_loss_rate = stop_loss_rate / 100.0
@@ -217,11 +218,15 @@ class Strategy:
         _global_pick_cache[today] = self.picked_numpy_data
 
         if self.debug:
-            print(f"日期 {today} 选出股票 {len(sorted_indices)} 只")
+            codes_list = list(numpy_data['code'][sorted_indices])
+            codes_str = ','.join([str(c) for c in codes_list[:5]])
+            if len(codes_list) > 5:
+                codes_str += f",...({len(codes_list)-5} more)"
+            print(f"日期 {today} 选出股票 {len(sorted_indices)} 只: {codes_str}")
     
 
     def buy(self) -> None:
-        """执行买入操作"""
+        """执行买入操作 - 优化仓位分配"""
         numpy_data = self.picked_numpy_data
         if numpy_data is None or len(numpy_data['code']) == 0:
             return
@@ -243,8 +248,17 @@ class Strategy:
         price_limit_status = numpy_data['price_limit_status']
         hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
 
-        # 预计算固定买入金额（固定比例模式）
-        base_amount = int(self.init_amount * self.position_value / 100)
+        # 计算买入金额 - 基于剩余资金和剩余持仓数动态分配
+        # 每只买入金额 = 剩余资金 / 剩余持仓数量
+        # 这样确保资金充分利用，每只仓位均匀
+        base_amount = int(free_amount / remaining_hold_count)
+
+        # 统计过滤原因
+        if self.debug:
+            total_candidates = len(codes)
+            limit_up_count = np.sum(price_limit_status == 1)
+            already_hold = sum(1 for c in codes if c in hold_codes_arr)
+            print(f"日期 {today} 买入筛选: 候选{total_candidates}只|涨停{limit_up_count}只|已持仓{already_hold}只|剩余{remaining_hold_count}仓位")
 
         # 使用 Numba 计算买入股数（包含涨停过滤和持仓检查）
         buy_counts = _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr, base_amount)
@@ -257,6 +271,8 @@ class Strategy:
 
         # 批量买入
         buy_limit = min(len(valid_codes), remaining_hold_count)
+        if self.debug and buy_limit == 0 and len(codes) > 0:
+            print(f"日期 {today} 无有效买入: 全部涨停或已持仓")
         for i in range(buy_limit):
             code = int(valid_codes[i])
             next_open = int(valid_opens[i])
@@ -282,21 +298,31 @@ class Strategy:
         today = self.today
         sells_info: list[tuple[int, int, str]] = []
 
+        # 统计卖出检查
+        if is_debug:
+            limit_down_count = 0
+            no_data_count = 0
+            skip_today_count = 0
+
         for i in range(hold_length):
             hold_stock = hold[i]
             code = hold_stock.code
             buy_day = hold_stock.buy_day
             if buy_day == today:
+                if is_debug:
+                    skip_today_count += 1
                 continue
 
             stock_data_dict = self.data.get_data_by_date_code(today, code)
             if stock_data_dict is None:
                 if is_debug:
-                    print(f"日期 {today} 没有找到股票 {code} 的数据,跳过卖出")
+                    no_data_count += 1
+                    print(f"日期 {today} 股票 {code} 无数据,跳过卖出")
                 continue
 
             if stock_data_dict['price_limit_status'] == 2:
                 if is_debug:
+                    limit_down_count += 1
                     print(f"日期 {today} 股票 {code} 跌停,无法卖出")
                 continue
 
@@ -308,6 +334,9 @@ class Strategy:
 
             if need_sell:
                 sells_info.append((code, sell_price, reason))
+
+        if is_debug and hold_length > 0:
+            print(f"日期 {today} 卖出检查: 持仓{hold_length}只|跌停{limit_down_count}只|无数据{no_data_count}只|当日买入{skip_today_count}只|触发卖出{len(sells_info)}只")
         
         sells_info_length = len(sells_info)
         if sells_info_length == 0:
@@ -383,12 +412,25 @@ class Strategy:
 
         # 生成原因字符串（仅在debug模式）
         if is_debug:
+            buy_price_yuan = buy_price / 100
             if sell_price == stop_loss_price:
-                reason = f"止损：触及止损价{stop_loss_price/100:.2f}"
+                stop_loss_rate = self._stop_loss_rate * 100
+                reason = f"止损|买价{buy_price_yuan:.2f}|止损率{stop_loss_rate:.0f}%|止损价{stop_loss_price/100:.2f}|开{open_price/100:.2f}|低{low_price/100:.2f}"
             elif hold_days <= self._hold_days_limit:
-                reason = f"未达标：持仓{hold_days}天"
+                target_return_pct = self._target_return * 100
+                close_yuan = close_price / 100
+                target_yuan = target_return_price / 100
+                reason = f"未达标|持仓{hold_days}天/限{self._hold_days_limit}天|目标{target_return_pct:.0f}%|目标价{target_yuan:.2f}|收{close_yuan:.2f}"
             else:
-                reason = f"移动止盈：触及止盈价{trailing_stop_price/100:.2f}"
+                # 移动止盈 - 区分开盘回落还是盘中回落
+                trailing_rate_pct = self._trailing_rate * 100
+                highest_yuan = highest_price / 100
+                trailing_yuan = trailing_stop_price / 100
+                high_yuan = high_price / 100
+                if open_price <= trailing_stop_price:
+                    reason = f"止盈|开盘回落|回撤率{trailing_rate_pct:.0f}%|最高{highest_yuan:.2f}|止盈价{trailing_yuan:.2f}|开{open_price/100:.2f}"
+                else:
+                    reason = f"止盈|盘中回落|回撤率{trailing_rate_pct:.0f}%|最高{highest_yuan:.2f}|止盈价{trailing_yuan:.2f}|低{low_price/100:.2f}|高{high_yuan:.2f}"
             return True, sell_price, reason
 
         return True, sell_price, EMPTY_STRING
@@ -421,7 +463,12 @@ class Strategy:
                 profit_cents = (close_price - buy_price) * buy_count
                 profit_rate = (close_price - buy_price) / buy_price
                 highest_price = hold_stock.highest_price
-                print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计: {profit_cents/100:.2f} ({profit_rate:.2%})")
+                hold_days = self.calendar.gap(hold_stock.buy_day, today) if self.calendar else 0
+                # 计算关键价格用于验证止盈逻辑
+                target_price = int(buy_price * (1 + self._target_return))
+                stop_loss_price = int(buy_price * (1 + self._stop_loss_rate))
+                trailing_stop_price = int(highest_price * (1 - self._trailing_rate)) if highest_price > 0 else 0
+                print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 持仓{hold_days}天 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计:{profit_cents/100:.2f}({profit_rate:.2%}) 目标价{target_price/100:.2f} 止损价{stop_loss_price/100:.2f} 止盈价{trailing_stop_price/100:.2f}")
 
             hold_amount += close_price * buy_count
         

@@ -12,6 +12,9 @@ from local_cache import LocalCache
 from dto import *
 from strategy_impl import *
 
+# 导入日志配置
+import logger_config
+
 class Chain:
     def __init__(self, param=None):
         self.strategies = param.get("strategy")  # 策略列表（可能为None，使用生成器模式）
@@ -157,10 +160,10 @@ class Chain:
                 except Exception as e:
                     print(f"年周期执行失败: {e}")
 
-            # 构建配置字符串：只保留可调整参数（持仓数量,仓位比例|买入参数|排序参数|卖出参数）
+            # 构建配置字符串：只保留可调整参数（持仓数量|买入参数|排序参数|卖出参数）
             base_arr = params.get('base_param_arr')
-            # 持仓数量,仓位比例（去掉固定的买卖顺序和仓位模式）
-            base_config = [base_arr[1], base_arr[4] // 1000000 if base_arr[4] > 10000 else base_arr[4]]
+            # 只保留持仓数量（动态仓位，去掉仓位比例）
+            base_config = [base_arr[1]]
             cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
             new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
             # print(new_row)
@@ -229,8 +232,16 @@ class Chain:
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
         """排序DataFrame，按年周期收益率倒排"""
-        # 按年周期收益率降序排序
-        df = df.sort(by='年周期收益率', descending=True)
+        if df.is_empty():
+            return df
+        # 将年周期收益率转换为数值类型（处理字符串百分比格式）
+        df = df.with_columns(
+            pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
+        )
+        # 按年周期收益率数值降序排序
+        df = df.sort(by='年周期收益率数值', descending=True)
+        # 删除临时列
+        df = df.drop('年周期收益率数值')
         return df
     
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str, year_result: object = None) -> dict:
@@ -565,9 +576,10 @@ class Chain:
                 except Exception as e:
                     print(f"年周期执行失败: {e}")
 
-            # 构建配置字符串：只保留可调整参数（持仓数量,仓位比例|买入参数|排序参数|卖出参数）
+            # 构建配置字符串：只保留可调整参数（持仓数量|买入参数|排序参数|卖出参数）
             base_arr = params.get('base_param_arr')
-            base_config = [base_arr[1], base_arr[4] // 1000000 if base_arr[4] > 10000 else base_arr[4]]
+            # 只保留持仓数量（动态仓位，去掉仓位比例）
+            base_config = [base_arr[1]]
             cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
             new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
             print(new_row)
