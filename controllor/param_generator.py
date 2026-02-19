@@ -23,8 +23,8 @@ class ParamGenerator:
         self.sort_field_range = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] # 排序字段: 全字段测试
         self.sort_desc_range = [0, 1]                          # 排序方式: 升序/降序
 
-        # 卖出参数范围 - 扩大范围精细测试
-        self.sell_stop_loss_range = list(range(-25, -8, 1))    # 止损率: -25到-9%，更宽范围
+        # 卖出参数范围 - 根据持仓天数优化止损范围
+        self.sell_stop_loss_range = list(range(-12, -4, 1))    # 止损率: -12到-5%，适配短线持仓
         self.sell_hold_days_range = [1, 2, 3, 4, 5]            # 持仓天数: 1-5天
         self.sell_target_return_range = [3, 4, 5, 6, 7, 8, 9, 10, 12, 15]  # 目标涨幅: 3-15%
         self.sell_trailing_range = [2, 3, 4, 5, 8, 10, 13, 15, 18, 20]     # 回撤率: 2-20%

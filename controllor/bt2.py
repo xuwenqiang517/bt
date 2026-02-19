@@ -118,7 +118,7 @@ if __name__ == "__main__":
     2,0,1,40|2,8,8,3,1|5,0|-20,2,5,3
     """
 
-    bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000)
+    bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])

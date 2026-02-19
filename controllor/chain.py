@@ -314,6 +314,17 @@ class Chain:
             # 加载进程缓存
             thread_a_df = cache.get_csv_pl(thread_cache_filename)
             if thread_a_df is not None and not thread_a_df.is_empty():
+                # 确保列顺序一致，避免concat时报错
+                if set(main_a_df.columns) != set(thread_a_df.columns):
+                    # 补齐缺失的列
+                    for col in main_a_df.columns:
+                        if col not in thread_a_df.columns:
+                            thread_a_df = thread_a_df.with_columns(pl.lit("").alias(col))
+                    for col in thread_a_df.columns:
+                        if col not in main_a_df.columns:
+                            main_a_df = main_a_df.with_columns(pl.lit("").alias(col))
+                # 按主进程的列顺序重新排列
+                thread_a_df = thread_a_df.select(main_a_df.columns)
                 main_a_df = pl.concat([main_a_df, thread_a_df], rechunk=True)
                 # 删除已合并的进程缓存文件
                 cache.delete_file(f"{thread_cache_filename}.csv")
