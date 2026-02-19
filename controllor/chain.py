@@ -24,6 +24,7 @@ class Chain:
 
         self.param = param  # 原始参数
         self.result_file = param.get("result_file", None)  # 结果文件
+        self.run_year = param.get("run_year", True)  # 是否跑年周期，默认True
 
         # 生成器模式相关参数
         self.use_param_generator = param.get("use_param_generator", False)
@@ -148,12 +149,13 @@ class Chain:
             successful_count=total_count-failure_count
             actual_win_rate = successful_count / total_count if results else 0
 
-            # 跑年连续周期 20250101-20260101
+            # 跑年连续周期 20250101-20260101（根据run_year参数决定是否执行）
             year_result = None
-            try:
-                year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
-            except Exception as e:
-                print(f"年周期执行失败: {e}")
+            if self.run_year:
+                try:
+                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+                except Exception as e:
+                    print(f"年周期执行失败: {e}")
 
             # 构建配置字符串：只保留可调整参数（持仓数量,仓位比例|买入参数|排序参数|卖出参数）
             base_arr = params.get('base_param_arr')
@@ -226,19 +228,9 @@ class Chain:
         return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """排序DataFrame，优先周期胜率，其次平均胜率"""
-        # 先添加临时列，提取周期胜率和平均胜率数值用于排序
-        df = df.with_columns([
-            pl.col('周期胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('周期胜率数值'),
-            pl.col('平均胜率').str.extract(r'^(\d+)%').cast(pl.Int32).alias('平均胜率数值')
-        ])
-        # 按周期胜率优先，其次平均胜率排序
-        df = df.sort(
-            by=['周期胜率数值', '平均胜率数值'],
-            descending=[True, True]
-        )
-        # 删除临时列
-        df = df.drop(['周期胜率数值', '平均胜率数值'])
+        """排序DataFrame，按年周期收益率倒排"""
+        # 按年周期收益率降序排序
+        df = df.sort(by='年周期收益率', descending=True)
         return df
     
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str, year_result: object = None) -> dict:
@@ -489,7 +481,7 @@ class Chain:
                 process_name = f"ChainProcess-{i}"
                 process = multiprocessing.Process(
                     target=self._process_strategy_generator_worker,
-                    args=(i, start_idx, end_idx, self.param, self.result_file),
+                    args=(i, start_idx, end_idx, self.param, self.result_file, total_strategies),
                     name=process_name
                 )
                 processes.append(process)
@@ -565,12 +557,13 @@ class Chain:
             successful_count = total_count - failure_count
             actual_win_rate = successful_count / total_count if results else 0
 
-            # 跑年连续周期 20250101-20260101
+            # 跑年连续周期 20250101-20260101（根据run_year参数决定是否执行）
             year_result = None
-            try:
-                year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
-            except Exception as e:
-                print(f"年周期执行失败: {e}")
+            if self.run_year:
+                try:
+                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+                except Exception as e:
+                    print(f"年周期执行失败: {e}")
 
             # 构建配置字符串：只保留可调整参数（持仓数量,仓位比例|买入参数|排序参数|卖出参数）
             base_arr = params.get('base_param_arr')
@@ -599,7 +592,7 @@ class Chain:
         self._save_cache(cache, cache_filename, cached_a_df)
 
     @staticmethod
-    def _process_strategy_generator_worker(thread_id: int, start_idx: int, end_idx: int, param: dict, result_file: str) -> None:
+    def _process_strategy_generator_worker(thread_id: int, start_idx: int, end_idx: int, param: dict, result_file: str, total_strategy_count: int = None) -> None:
         """子进程工作函数（静态方法，可序列化）"""
         from param_generator import ParamGenerator
 
@@ -608,6 +601,9 @@ class Chain:
         chain = Chain(param=param)
         chain.param_generator = gen
         chain.result_file = result_file
+        # 使用主进程传递的限制后策略数量
+        if total_strategy_count is not None:
+            chain.total_strategy_count = total_strategy_count
 
         chain._process_strategy_generator(thread_id, start_idx, end_idx)
 

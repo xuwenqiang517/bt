@@ -99,7 +99,7 @@ def str2dict(strategy_params):
     return strategy_params_list
 
 
-def bt_one(strategy_params, day_array):
+def bt_one(strategy_params, day_array, run_year=False):
     from datetime import datetime
     current_time = datetime.now().strftime("%m%d_%H%M")
     result_file = f"one_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-{current_time}"
@@ -107,7 +107,8 @@ def bt_one(strategy_params, day_array):
         "strategy": str2dict(strategy_params),
         "date_arr": day_array,
         "chain_debug": 1,
-        "result_file": result_file
+        "result_file": result_file,
+        "run_year": run_year
     }
     chain = Chain(param=param)
     chain.execute()
@@ -115,7 +116,7 @@ def bt_one(strategy_params, day_array):
 
 if __name__ == "__main__":
     s = """
-    2,0,1,40|2,8,8,3,1|5,0|-20,2,5,3
+    2,40|2,8,8,3,1,1|5,0|-10,2,4,3
     """
 
     bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000)

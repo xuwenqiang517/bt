@@ -8,23 +8,6 @@ from numba import njit
 from dto import *
 
 @njit(cache=True)
-def _filter_buy_mask(codes, buy_counts, hold_codes_arr):
-    """Numba JIT 编译的买入过滤函数"""
-    n = len(codes)
-    result = np.empty(n, dtype=np.bool_)
-    for i in range(n):
-        # buy_counts > 0 且 code 不在 hold_codes 中
-        result[i] = (buy_counts[i] > 0)
-        if result[i]:
-            # 检查是否在持仓中
-            for j in range(len(hold_codes_arr)):
-                if codes[i] == hold_codes_arr[j]:
-                    result[i] = False
-                    break
-    return result
-
-
-@njit(cache=True)
 def _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr, base_amount):
     """Numba JIT 编译的买入股数计算函数 - 固定比例模式
     base_amount: 固定买入金额（分）
@@ -86,9 +69,9 @@ EMPTY_STRING = ""
 
 # 全局选票缓存结构：
 # _global_pick_cache: {date -> {code_arr, next_open_arr, price_limit_status_arr}}
-# _global_pick_cache_param_key: 当前缓存对应的参数标识 (buy_param_str + pick_param_str)
+# _global_pick_cache_param_key: 当前缓存对应的参数标识 (tuple形式的买入+选股参数)
 _global_pick_cache: dict[int, dict] = {}
-_global_pick_cache_param_key: str = ""
+_global_pick_cache_param_key: tuple = ()
 
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
@@ -175,11 +158,12 @@ class Strategy:
                 return hold
         return None
     
-    def _compute_pick_param_key(self) -> str:
-        """预计算选票参数标识，策略初始化时调用一次"""
-        buy_key = ",".join(map(str, self.buy_param_arr))
-        pick_key = ",".join(map(str, self.pick_param_arr))
-        return f"{buy_key}|{pick_key}"
+    def _compute_pick_param_key(self) -> tuple:
+        """预计算选票参数标识，使用tuple作为key
+        tuple作为dict key性能最优，无需字符串转换
+        示例: buy=[-1, 8, 5, 3, 1, 0], pick=[5, 0] -> (-1, 8, 5, 3, 1, 0, 5, 0)
+        """
+        return tuple(self.buy_param_arr + self.pick_param_arr)
 
     def pick(self) -> None:
         """选择符合条件的股票，使用全局缓存避免重复计算
