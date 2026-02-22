@@ -114,20 +114,17 @@ class UpStrategy(Strategy):
         sort_field = SORT_FIELD_MAP.get(sort_field_idx, 'amount')
         desc = bool(sort_desc)
 
-        def sorter_func(numpy_data: dict, mask: np.ndarray) -> np.ndarray:
-            """返回排序后的索引数组"""
-            if not mask.any():
-                return np.array([], dtype=np.int64)
-
-            row_indices = np.nonzero(mask)[0]
-            if len(row_indices) <= 1:
-                return row_indices
+        def sorter_func(filtered_data: dict) -> np.ndarray:
+            """返回排序后的索引数组（输入已是筛选后的数据）"""
+            n = len(filtered_data['code'])
+            if n <= 1:
+                return np.arange(n, dtype=np.int64)
 
             # 获取排序字段的值
-            sort_values = numpy_data[sort_field][row_indices]
+            sort_values = filtered_data[sort_field]
 
             # 使用Numba排序
-            sorted_local_indices = _argsort_numba(sort_values, desc)
-            return row_indices[sorted_local_indices]
+            sorted_indices = _argsort_numba(sort_values, desc)
+            return sorted_indices
 
         self._pick_sorter = sorter_func

@@ -335,10 +335,12 @@ class Chain:
         # 去重并排序
         if not main_a_df.is_empty() and not self.chain_debug:
             main_a_df = main_a_df.unique(subset=['配置'])
-            main_a_df = main_a_df.sort(
-                by=['平均胜率', '平均收益率'], 
-                descending=[True, True]
+            # 按年周期收益率排序（处理字符串百分比格式）
+            main_a_df = main_a_df.with_columns(
+                pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
             )
+            main_a_df = main_a_df.sort(by='年周期收益率数值', descending=True)
+            main_a_df = main_a_df.drop('年周期收益率数值')
             # 保存到缓存
             self._save_cache(cache, main_cache_filename, main_a_df)
         

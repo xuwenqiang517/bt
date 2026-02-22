@@ -70,11 +70,13 @@ def _check_sell_numba(buy_price, highest_price, hold_days,
 # 全局常量
 EMPTY_STRING = ""
 
-# 全局选票缓存结构：
-# _global_pick_cache: {date -> {code_arr, next_open_arr, price_limit_status_arr}}
-# _global_pick_cache_param_key: 当前缓存对应的参数标识 (tuple形式的买入+选股参数)
-_global_pick_cache: dict[int, dict] = {}
-_global_pick_cache_param_key: tuple = ()
+# 全局选票缓存结构（两级缓存）：
+# _global_filter_cache: {filter_key -> {date -> filtered_data}} 筛选缓存（只依赖买入参数）
+# _global_sort_cache: {sort_key -> {date -> sorted_data}} 排序缓存（依赖选股参数）
+_global_filter_cache: dict[tuple, dict[int, dict]] = {}
+_global_sort_cache: dict[tuple, dict[int, dict]] = {}
+_global_current_filter_key: tuple = ()
+_global_current_sort_key: tuple = ()
 
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
@@ -103,11 +105,15 @@ class Strategy:
         self._hold_days_limit = hold_days_limit
         self._target_return = target_return / 100.0
         self._trailing_rate = trailing_rate / 100.0
+        # 交易费用参数
+        self._commission_rate = 0.0001   # 手续费率 0.01% (万1)
+        self._slippage_rate = 0.001      # 滑点率 0.1%
         self.data = None
         self.calendar = None
         self.debug = debug
-        # 预计算选票参数标识，避免重复创建字符串
-        self._pick_param_key = self._compute_pick_param_key()
+        # 预计算两级缓存参数标识
+        self._filter_key = self._compute_filter_key()
+        self._sort_key = self._compute_sort_key()
         self._init_pick_filter()
         self._init_pick_sorter()
         self.reset()
@@ -159,70 +165,112 @@ class Strategy:
                 return hold
         return None
     
-    def _compute_pick_param_key(self) -> tuple:
-        """预计算选票参数标识，使用tuple作为key
-        tuple作为dict key性能最优，无需字符串转换
-        示例: buy=[-1, 8, 5, 3, 1, 0], pick=[5, 0] -> (-1, 8, 5, 3, 1, 0, 5, 0)
-        """
+    def _compute_filter_key(self) -> tuple:
+        """计算筛选参数key（只包含买入参数）"""
+        return tuple(self.buy_param_arr)
+
+    def _compute_sort_key(self) -> tuple:
+        """计算排序参数key（包含买入+选股参数）"""
         return tuple(self.buy_param_arr + self.pick_param_arr)
 
     def pick(self) -> None:
-        """选择符合条件的股票，使用全局缓存避免重复计算
-        缓存按参数组管理，参数变化时自动清理旧缓存
+        """选择符合条件的股票，使用两级缓存优化性能
+        第一级：筛选缓存（按买入参数）
+        第二级：排序缓存（按买入+选股参数）
         """
-        global _global_pick_cache, _global_pick_cache_param_key
+        global _global_filter_cache, _global_sort_cache
+        global _global_current_filter_key, _global_current_sort_key
 
         today = self.today
+        filter_key = self._filter_key
+        sort_key = self._sort_key
 
-        # 检查参数是否变化，变化则清理缓存（使用预计算的参数标识）
-        if self._pick_param_key != _global_pick_cache_param_key:
-            _global_pick_cache.clear()
-            _global_pick_cache_param_key = self._pick_param_key
-            if self.debug:
-                print(f"参数变化，清理选票缓存，新参数: {self._pick_param_key}")
-
-        # 检查缓存
-        if today in _global_pick_cache:
-            self.picked_numpy_data = _global_pick_cache[today]
+        # 检查排序缓存（第二级缓存，命中率最高）
+        if today in _global_sort_cache.get(sort_key, {}):
+            self.picked_numpy_data = _global_sort_cache[sort_key][today]
             if self.debug:
                 count = len(self.picked_numpy_data['code']) if self.picked_numpy_data else 0
-                print(f"日期 {today} 选出股票 {count} 只 (缓存)")
+                print(f"日期 {today} 选出股票 {count} 只 (排序缓存)")
             return
 
-        numpy_data = self.data.get_numpy_data_by_date(today)
-        if numpy_data is None or len(numpy_data['code']) == 0:
-            self.picked_numpy_data = None
-            _global_pick_cache[today] = None
+        # 检查筛选缓存（第一级缓存）
+        if today in _global_filter_cache.get(filter_key, {}):
+            filtered_data = _global_filter_cache[filter_key][today]
             if self.debug:
-                print(f"日期 {today} 无符合条件股票")
-            return
+                print(f"日期 {today} 使用筛选缓存，重新排序")
+        else:
+            # 筛选参数变化，清理所有缓存
+            if filter_key != _global_current_filter_key:
+                _global_filter_cache.clear()
+                _global_sort_cache.clear()
+                _global_current_filter_key = filter_key
+                _global_current_sort_key = ()
+                if self.debug:
+                    print(f"筛选参数变化，清理所有缓存: {filter_key}")
 
-        mask = self._pick_filter(numpy_data)
-        if not mask.any():
-            self.picked_numpy_data = None
-            _global_pick_cache[today] = None
-            if self.debug:
-                print(f"日期 {today} 无符合条件股票")
-            return
+            numpy_data = self.data.get_numpy_data_by_date(today)
+            if numpy_data is None or len(numpy_data['code']) == 0:
+                self.picked_numpy_data = None
+                if sort_key not in _global_sort_cache:
+                    _global_sort_cache[sort_key] = {}
+                _global_sort_cache[sort_key][today] = None
+                if self.debug:
+                    print(f"日期 {today} 无符合条件股票")
+                return
+
+            mask = self._pick_filter(numpy_data)
+            if not mask.any():
+                self.picked_numpy_data = None
+                if sort_key not in _global_sort_cache:
+                    _global_sort_cache[sort_key] = {}
+                _global_sort_cache[sort_key][today] = None
+                if self.debug:
+                    print(f"日期 {today} 无符合条件股票")
+                return
+
+            # 保存筛选结果（未排序的原始数据，包含所有可能用于排序的字段）
+            filtered_data = {
+                'code': numpy_data['code'][mask],
+                'next_open': numpy_data['next_open'][mask],
+                'price_limit_status': numpy_data['price_limit_status'][mask],
+                'amount': numpy_data['amount'][mask],
+                'change_pct': numpy_data['change_pct'][mask],
+                'change_3d': numpy_data['change_3d'][mask],
+                'change_5d': numpy_data['change_5d'][mask],
+                'consecutive_up_days': numpy_data['consecutive_up_days'][mask],
+                'volume': numpy_data['volume'][mask],
+                'close': numpy_data['close'][mask],
+                'open': numpy_data['open'][mask],
+                'high': numpy_data['high'][mask],
+                'low': numpy_data['low'][mask],
+            }
+
+            # 存入筛选缓存
+            if filter_key not in _global_filter_cache:
+                _global_filter_cache[filter_key] = {}
+            _global_filter_cache[filter_key][today] = filtered_data
 
         # 使用排序器对筛选结果排序
-        sorted_indices = self._pick_sorter(numpy_data, mask)
+        sorted_indices = self._pick_sorter(filtered_data)
 
         self.picked_numpy_data = {
-            'code': numpy_data['code'][sorted_indices],
-            'next_open': numpy_data['next_open'][sorted_indices],
-            'price_limit_status': numpy_data['price_limit_status'][sorted_indices],
+            'code': filtered_data['code'][sorted_indices],
+            'next_open': filtered_data['next_open'][sorted_indices],
+            'price_limit_status': filtered_data['price_limit_status'][sorted_indices],
         }
 
-        # 存入缓存
-        _global_pick_cache[today] = self.picked_numpy_data
+        # 存入排序缓存
+        if sort_key not in _global_sort_cache:
+            _global_sort_cache[sort_key] = {}
+        _global_sort_cache[sort_key][today] = self.picked_numpy_data
+        _global_current_sort_key = sort_key
 
         if self.debug:
-            codes_list = list(numpy_data['code'][sorted_indices])
+            codes_list = list(self.picked_numpy_data['code'])
             codes_str = ','.join([str(c) for c in codes_list[:5]])
             if len(codes_list) > 5:
                 codes_str += f",...({len(codes_list)-5} more)"
-            print(f"日期 {today} 选出股票 {len(sorted_indices)} 只: {codes_str}")
+            print(f"日期 {today} 选出股票 {len(codes_list)} 只: {codes_str}")
     
 
     def buy(self) -> None:
@@ -277,15 +325,21 @@ class Strategy:
             code = int(valid_codes[i])
             next_open = int(valid_opens[i])
             buy_count = int(valid_counts[i])
-            hold_stock = HoldStock(code, next_open, buy_count, today)
+            # 加入滑点：买入价格上浮
+            buy_price_with_slippage = int(next_open * (1 + self._slippage_rate))
+            hold_stock = HoldStock(code, buy_price_with_slippage, buy_count, today)
             self._add_hold(hold_stock)
-            cost_cents = buy_count * next_open
-            self.free_amount -= cost_cents
+            # 计算成本：股票价格 + 手续费
+            stock_cost = buy_count * buy_price_with_slippage
+            commission = int(stock_cost * self._commission_rate)
+            total_cost = stock_cost + commission
+            self.free_amount -= total_cost
 
             if self.debug:
                 free_amount = self.free_amount / 100
-                cost = cost_cents / 100
-                print(f"日期 {today} 买入 {code} , {next_open/100:.2f} * {buy_count} = {cost:.2f} ,剩余资金 {free_amount:.2f}")
+                cost = stock_cost / 100
+                comm = commission / 100
+                print(f"日期 {today} 买入 {code} , {buy_price_with_slippage/100:.2f} * {buy_count} = {cost:.2f} (含滑点), 手续费{comm:.2f}, 剩余资金 {free_amount:.2f}")
 
     def sell(self) -> None:
         is_debug=self.debug
@@ -345,16 +399,24 @@ class Strategy:
         # 批量处理卖出
         trades_history = self.trades_history
         for i in range(sells_info_length):
-            code, sell_price, sell_reason = sells_info[i]
+            code, sell_price_raw, sell_reason = sells_info[i]
             hold_stock = self._remove_hold(code)
             if hold_stock:
                 buy_price = hold_stock.buy_price
                 buy_count = hold_stock.buy_count
+                # 加入滑点：卖出价格下浮
+                sell_price = int(sell_price_raw * (1 - self._slippage_rate))
+                # 计算卖出收入
+                sell_revenue = sell_price * buy_count
+                # 计算卖出手续费
+                sell_commission = int(sell_revenue * self._commission_rate)
+                # 实际到账金额
+                net_revenue = sell_revenue - sell_commission
                 # 计算盈亏
-                profit_cents = (sell_price - buy_price) * buy_count
-                self.free_amount += sell_price * buy_count
-                # 计算盈亏率
                 cost_cents = buy_price * buy_count
+                profit_cents = net_revenue - cost_cents
+                self.free_amount += net_revenue
+                # 计算盈亏率
                 profit_rate = profit_cents / cost_cents if cost_cents > 0 else 0
                 
                 # 记录交易历史
@@ -373,7 +435,8 @@ class Strategy:
                 if is_debug:
                     free_amount = self.free_amount / 100
                     profit = profit_cents // 100
-                    print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 剩余资金 {free_amount:.2f}")
+                    comm = sell_commission // 100
+                    print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 手续费{comm}, 剩余资金 {free_amount:.2f}")
                 
 
     def _check_sell(self, hold: HoldStock, stock_data_dict: dict) -> tuple[bool, int, str]:
