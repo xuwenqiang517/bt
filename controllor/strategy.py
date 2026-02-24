@@ -182,13 +182,18 @@ class Strategy:
 
     def _init_pick_sorter(self) -> None:
         """初始化排序函数
-        数据已按成交量升序排列，直接使用无需排序
+        根据pick_param_arr[0]决定排序方向：0=成交量升序(冷门股)，1=成交量降序(热门股)
         """
+        sort_desc = self.pick_param_arr[0] if len(self.pick_param_arr) > 0 else 0
+
         def sorter_func(filtered_data: dict) -> np.ndarray:
             """返回排序后的索引数组（输入已是筛选后的数据）"""
-            n = len(filtered_data['code'])
-            # 数据已按成交量升序排列，直接使用
-            return np.arange(n, dtype=np.int64)
+            if sort_desc == 1:
+                # 成交量降序（热门股优先）
+                return np.argsort(-filtered_data['volume'])
+            else:
+                # 成交量升序（冷门股优先），数据已预排序，直接使用
+                return np.arange(len(filtered_data['code']), dtype=np.int64)
         self._pick_sorter = sorter_func
     
     def bind(self, data: sd, calendar: sc) -> None:

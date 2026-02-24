@@ -11,16 +11,24 @@ class StockPicker:
     def __init__(self, config_str: str):
         """
         选股器初始化
-        config_str: 格式 "基础参数|买入参数|卖出参数"
-        例如: "1|2,3,3,1,0,1|-12,4,2,7"
+        config_str: 格式 "持仓数量|买入参数|排序方向|卖出参数"
+        例如: "1|2,3,3,1,0,1|0|-12,4,2,7"
+        排序方向: 0=成交量升序(冷门股), 1=成交量降序(热门股)
         """
         self.config_str = config_str
         parts = config_str.split("|")
 
-        # 解析参数
+        # 解析参数（支持3段旧格式和4段新格式）
         self.base_params = [10000000, int(parts[0])]  # 初始资金、最大持仓
         self.buy_params = list(map(int, parts[1].split(",")))
-        self.sell_params = list(map(int, parts[2].split(",")))
+        if len(parts) >= 4:
+            # 新格式: 持仓|买入|排序|卖出
+            self.pick_params = [int(parts[2])]
+            self.sell_params = list(map(int, parts[3].split(",")))
+        else:
+            # 旧格式: 持仓|买入|卖出
+            self.pick_params = [0]  # 默认升序
+            self.sell_params = list(map(int, parts[2].split(",")))
         self.max_hold = int(parts[0])
 
         # 创建Strategy实例，复用其筛选和排序逻辑
@@ -28,13 +36,14 @@ class StockPicker:
             base_param_arr=self.base_params,
             sell_param_arr=self.sell_params,
             buy_param_arr=self.buy_params,
-            pick_param_arr=[],  # 排序固定为成交量升序
+            pick_param_arr=self.pick_params,
             debug=False
         )
 
         # 构建筛选条件描述
         limit_up_desc = {-1: "不限", 0: "10天0涨停", 1: "10天≥1涨停"}
         volume_ratio_val = self.buy_params[5] if len(self.buy_params) > 5 else -1
+        sort_desc = self.pick_params[0] if len(self.pick_params) > 0 else 0
         self._filter_params = {
             "连涨天数≥": self.buy_params[0] if self.buy_params[0] > 0 else "不限",
             "3日涨幅>": f"{self.buy_params[1]}%" if self.buy_params[1] > 0 else "不限",
@@ -42,7 +51,7 @@ class StockPicker:
             "当日涨幅<": f"{self.buy_params[3]}%" if self.buy_params[3] > 0 else "不限",
             "涨停条件": limit_up_desc.get(self.buy_params[4] if len(self.buy_params) > 4 else -1, "不限"),
             "量比>": f"{volume_ratio_val}" if volume_ratio_val > 0 else "不限",
-            "排序": "成交量升序（冷门股）"
+            "排序": "成交量降序（热门股）" if sort_desc == 1 else "成交量升序（冷门股）"
         }
 
     def pick(self, target_date: str = None) -> pl.DataFrame:
@@ -187,7 +196,7 @@ def main():
     if len(sys.argv) > 1:
         config = sys.argv[1]
     else:
-        config = "3|3,10,15|-15,5,7,6"  # 默认配置
+        config = "1|2,7,6,3,-1,1|1|-10,5,12,6"  # 默认配置
     
     picker = StockPicker(config)
     picker.pick()

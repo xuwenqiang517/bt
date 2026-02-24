@@ -68,14 +68,18 @@ def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count
 
 
 def str2dict(strategy_params):
-    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停条件,量比|止损率,持仓天数,目标涨幅,回撤率
-    # 示例: 1|2,3,3,1,0,1.5|-5,2,5,7
+    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停条件,量比|排序方向|止损率,持仓天数,目标涨幅,回撤率
+    # 示例: 1|2,3,3,1,0,1.5|1|-5,2,5,7
     # 涨停条件: -1=不限, 0=10天内0涨停(排除涨停股), 1=10天内≥1次涨停
     # 量比: -1=不限, 1=放量, 1.5=明显放量, 2=大幅放量
-    parts = strategy_params.strip().split("|")
+    # 排序方向: 0=成交量升序(冷门股), 1=成交量降序(热门股)
+    # 清理所有空白字符（包括换行、空格、制表符）
+    cleaned = ''.join(strategy_params.split())
+    parts = cleaned.split("|")
     base_arr = parts[0]
     buy_arr = parts[1]
-    sell_arr = parts[2] if len(parts) > 2 else "-8,2,5,7"
+    pick_arr = parts[2] if len(parts) > 3 else "0"
+    sell_arr = parts[3] if len(parts) > 3 else "-8,2,5,7"
 
     # 解析基础参数：只保留持仓数量
     hold_count = int(base_arr)
@@ -97,7 +101,7 @@ def str2dict(strategy_params):
     strategy_params_list.append({
         "base_param_arr": [10000000, hold_count],
         "buy_param_arr": buy_params,
-        "pick_param_arr": [],  # 排序固定为成交量升序
+        "pick_param_arr": [int(pick_arr)],  # 排序方向: 0=升序(冷门), 1=降序(热门)
         "sell_param_arr": list(map(int, sell_arr.split(","))),
         "debug": 1
     })
@@ -122,7 +126,7 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    2|-1,3,5,3,0,1.5|-8,3,5,3
+    1|2,7,6,3,-1,1|0|-10,5,12,6
     """
 
     bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000000)
