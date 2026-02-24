@@ -13,44 +13,43 @@ class ParamGenerator:
         # 扩大持仓数量范围
         self.hold_count_range = [1, 2, 3]                   # 持仓数量: 2-5只
 
-        # 买入参数范围 - 大幅扩展
-        # 连涨天数: 扩大范围
-        self.buy_up_day_range = [-1, 1, 2, 3]
-        # 3日涨幅: 去掉2个值
-        self.buy_day3_range = [-1, 2, 3, 4, 5, 6, 8]
-        # 5日涨幅: 去掉2个值
-        self.buy_day5_range = [-1, 1, 2, 3, 4, 5, 6, 8, 10, 15]
-        # 当日涨幅上限: 大幅扩展
-        self.change_pct_max_range = [-1, 1, 2, 3, 5, 8]
-        # 涨停天数: 0=15天, 1=20天, 2=30天
-        self.limit_up_count_idx_range = [0, 1, 2]
-        # 涨停次数: 扩展
-        self.limit_up_count_min_range = [-1, 0, 1, 2]
-        # 排序字段: 只保留效果最好的几个
-        self.sort_field_range = [0, 4, 5, 6]
-        # 排序方式: 升序降序
+        # 买入参数范围（6个参数）
+        # 连涨天数: -1表示不限，增加4,5天更长的连涨趋势
+        self.buy_up_day_range = [-1, 1, 2, 3, 4, 5]
+        # 3日涨幅: -1表示不限，补充中间值
+        self.buy_day3_range = [-1, 3, 4, 5, 6, 7, 8]
+        # 5日涨幅: -1表示不限，补充中间值和更高涨幅
+        self.buy_day5_range = [-1, 5, 6, 8, 10, 12, 15]
+        # 当日涨幅上限: -1表示不限，更精细的买入时机控制
+        self.change_pct_max_range = [-1, 1, 2, 3, 4, 5]
+        # 涨停条件: -1表示不限，0表示10天内0涨停（排除涨停股），1表示10天内≥1次涨停
+        self.limit_up_count_range = [-1, 0, 1]
+        # 量比: -1表示不限，增加更极端的放量情况
+        self.volume_ratio_range = [-1, 1, 1.5, 2, 2.5, 3]
+
+        # 选股排序参数（1个参数）
+        # 排序方向: 0=成交量升序(冷门股)，1=成交量降序(热门股)
         self.sort_desc_range = [0, 1]
 
-        # 卖出参数 - 大幅扩展
-        # 止损率: 扩展范围
-        self.sell_stop_loss_range = [-5,-8,-12,-15]
-        # 持仓天数: 扩展
-        self.sell_hold_days_range = [ 2, 3, 4, 5]
-        # 目标涨幅: 大幅扩展
-        self.sell_target_return_range = [2, 3, 4, 5, 6, 8, 10, 12, 15, 20]
-        # 回撤率: 扩展
-        self.sell_trailing_range = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # 卖出参数
+        # 止损率: 更精细的梯度
+        self.sell_stop_loss_range = [-5, -6, -7, -8, -10]
+        # 持仓天数: 增加5天更长持仓周期
+        self.sell_hold_days_range = [2, 3, 4, 5]
+        # 目标涨幅: 提高最低目标到5%，增加更高收益目标
+        self.sell_target_return_range = [5, 8, 10, 12, 15, 20]
+        # 回撤率: 增加更宽松的止盈回撤
+        self.sell_trailing_range = [2, 3, 4, 5, 6, 7, 8]
 
-        # 计算总组合数（动态仓位，去掉position_value参数）
+        # 计算总组合数（动态仓位，买入参数6个+排序参数1个+卖出参数4个+持仓数量1个）
         self.total_count = (
             len(self.hold_count_range) *
             len(self.buy_up_day_range) *
             len(self.buy_day3_range) *
             len(self.buy_day5_range) *
             len(self.change_pct_max_range) *
-            len(self.limit_up_count_idx_range) *
-            len(self.limit_up_count_min_range) *
-            len(self.sort_field_range) *
+            len(self.limit_up_count_range) *
+            len(self.volume_ratio_range) *
             len(self.sort_desc_range) *
             len(self.sell_stop_loss_range) *
             len(self.sell_hold_days_range) *
@@ -72,16 +71,18 @@ class ParamGenerator:
             self.buy_day3_range,        # 3日涨幅
             self.buy_day5_range,        # 5日涨幅
             self.change_pct_max_range,  # 涨幅上限
-            self.limit_up_count_idx_range,  # 涨停天数选择
-            self.limit_up_count_min_range,  # 涨停次数
-            self.sort_field_range,      # 排序字段
-            self.sort_desc_range,       # 排序方式
+            self.limit_up_count_range,  # 涨停条件
+            self.volume_ratio_range,    # 量比
+        ]
+        # 选股排序参数（影响排序缓存）
+        pick_ranges = [
+            self.sort_desc_range,       # 排序方向
         ]
         # 基础参数（影响仓位）放中间 - 动态仓位，只保留持仓数量
         base_ranges = [
             self.hold_count_range,      # 持仓数量
         ]
-        # 卖出参数（固定1个）放最后
+        # 卖出参数放最后
         sell_ranges = [
             self.sell_stop_loss_range,
             self.sell_hold_days_range,
@@ -89,7 +90,7 @@ class ParamGenerator:
             self.sell_trailing_range
         ]
 
-        all_ranges = buy_ranges + base_ranges + sell_ranges
+        all_ranges = buy_ranges + pick_ranges + base_ranges + sell_ranges
 
         indices = []
         remaining = index
@@ -99,30 +100,30 @@ class ParamGenerator:
             remaining //= size
         indices.reverse()
 
-        # 买入参数（0-7）
+        # 买入参数（0-5）
         buy1 = self.buy_up_day_range[indices[0]]
         buy2 = self.buy_day3_range[indices[1]]
         buy3 = self.buy_day5_range[indices[2]]
         buy4 = self.change_pct_max_range[indices[3]]
-        buy5 = self.limit_up_count_idx_range[indices[4]]
-        buy6 = self.limit_up_count_min_range[indices[5]]
-        sort_field = self.sort_field_range[indices[6]]
-        sort_desc = self.sort_desc_range[indices[7]]
+        buy5 = self.limit_up_count_range[indices[4]]
+        buy6 = self.volume_ratio_range[indices[5]]
 
-        # 基础参数（8）- 动态仓位，只保留持仓数量
-        hold_count = self.hold_count_range[indices[8]]
-        buy_first = 0       # 固定先卖后买
+        # 选股排序参数（6）
+        sort_desc = self.sort_desc_range[indices[6]]
 
-        # 卖出参数（9-12）
-        sell1 = self.sell_stop_loss_range[indices[9]]
-        sell2 = self.sell_hold_days_range[indices[10]]
-        sell3 = self.sell_target_return_range[indices[11]]
-        sell4 = self.sell_trailing_range[indices[12]]
+        # 基础参数（7）- 只保留持仓数量
+        hold_count = self.hold_count_range[indices[7]]
+
+        # 卖出参数（8-11）
+        sell1 = self.sell_stop_loss_range[indices[8]]
+        sell2 = self.sell_hold_days_range[indices[9]]
+        sell3 = self.sell_target_return_range[indices[10]]
+        sell4 = self.sell_trailing_range[indices[11]]
 
         return {
-            "base_param_arr": [10000000, hold_count, buy_first],
+            "base_param_arr": [10000000, hold_count],
             "buy_param_arr": [buy1, buy2, buy3, buy4, buy5, buy6],
-            "pick_param_arr": [sort_field, sort_desc],
+            "pick_param_arr": [sort_desc],
             "sell_param_arr": [sell1, sell2, sell3, sell4],
             "debug": 0
         }
@@ -143,10 +144,8 @@ class ParamGenerator:
             len(self.buy_day3_range) *
             len(self.buy_day5_range) *
             len(self.change_pct_max_range) *
-            len(self.limit_up_count_idx_range) *
-            len(self.limit_up_count_min_range) *
-            len(self.sort_field_range) *
-            len(self.sort_desc_range)
+            len(self.limit_up_count_range) *
+            len(self.volume_ratio_range)
         )
         # 每个买入参数对应的基础+卖出参数组合数
         base_sell_combo_size = self.total_count // buy_combo_size

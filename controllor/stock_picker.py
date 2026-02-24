@@ -1,43 +1,48 @@
 from datetime import date
 import polars as pl
+import numpy as np
 
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
-from strategy_impl import UpStrategy
+from strategy import Strategy, _filter_numba
 
 
 class StockPicker:
     def __init__(self, config_str: str):
         """
         选股器初始化
-        config_str: 格式 "最大持仓数|买入参数|卖出参数"
-        例如: "3|3,10,15|-15,5,7,6" 表示最大持仓3只，买入参数为[3,10,15]，卖出参数为[-15,5,7,6]
+        config_str: 格式 "基础参数|买入参数|卖出参数"
+        例如: "1|2,3,3,1,0,1|-12,4,2,7"
         """
         self.config_str = config_str
         parts = config_str.split("|")
-        
+
         # 解析参数
-        self.max_hold = int(parts[0])
+        self.base_params = [10000000, int(parts[0])]  # 初始资金、最大持仓
         self.buy_params = list(map(int, parts[1].split(",")))
         self.sell_params = list(map(int, parts[2].split(",")))
-        
-        # 创建基础参数
-        self.base_params = [10000000, self.max_hold]  # 初始资金和最大持仓数
-        
-        # 创建UpStrategy实例，复用其筛选和排序逻辑
-        self.strategy = UpStrategy(
+        self.max_hold = int(parts[0])
+
+        # 创建Strategy实例，复用其筛选和排序逻辑
+        self.strategy = Strategy(
             base_param_arr=self.base_params,
             sell_param_arr=self.sell_params,
             buy_param_arr=self.buy_params,
+            pick_param_arr=[],  # 排序固定为成交量升序
             debug=False
         )
-        
+
         # 构建筛选条件描述
+        limit_up_desc = {-1: "不限", 0: "10天0涨停", 1: "10天≥1涨停"}
+        volume_ratio_val = self.buy_params[5] if len(self.buy_params) > 5 else -1
         self._filter_params = {
-            "连涨天数≥": self.buy_params[0],
-            "3日涨幅>": f"{self.buy_params[1]}%",
-            "5日涨幅>": f"{self.buy_params[2]}%",
-            "当日涨幅<": "5%"
+            "连涨天数≥": self.buy_params[0] if self.buy_params[0] > 0 else "不限",
+            "3日涨幅>": f"{self.buy_params[1]}%" if self.buy_params[1] > 0 else "不限",
+            "5日涨幅>": f"{self.buy_params[2]}%" if self.buy_params[2] > 0 else "不限",
+            "当日涨幅<": f"{self.buy_params[3]}%" if self.buy_params[3] > 0 else "不限",
+            "涨停条件": limit_up_desc.get(self.buy_params[4] if len(self.buy_params) > 4 else -1, "不限"),
+            "量比>": f"{volume_ratio_val}" if volume_ratio_val > 0 else "不限",
+            "排序": "成交量升序（冷门股）"
         }
 
     def pick(self, target_date: str = None) -> pl.DataFrame:
@@ -60,17 +65,50 @@ class StockPicker:
             print(f"   • {k}: {v}")
         print(f"{'='*50}\n")
 
-        # 将target_date转换为整数，因为get_data_by_date只接受int类型参数
-        today_stock_df = self.data.get_data_by_date(int(target_date))
-        if today_stock_df is None or today_stock_df.is_empty():
+        # 获取当天所有股票的numpy数据
+        today_int = int(target_date)
+        numpy_data = self.data.get_numpy_data_by_date(today_int)
+        if numpy_data is None:
             print(f"❌ 没有找到日期 {target_date} 的股票数据")
             return pl.DataFrame()
 
+        # 将numpy数据转换为polars DataFrame
+        today_stock_df = pl.DataFrame({
+            'code': numpy_data['code'],
+            'open': numpy_data['open'],
+            'close': numpy_data['close'],
+            'high': numpy_data['high'],
+            'low': numpy_data['low'],
+            'volume': numpy_data['volume'],
+            'amount': numpy_data['amount'],
+            'change_pct': numpy_data['change_pct'],
+            'change_3d': numpy_data['change_3d'],
+            'change_5d': numpy_data['change_5d'],
+            'consecutive_up_days': numpy_data['consecutive_up_days'],
+            'limit_up_count_10d': numpy_data['limit_up_count_10d'],
+            'volume_ratio': numpy_data['volume_ratio'],
+            'price_limit_status': numpy_data['price_limit_status']
+        })
+
         print(f"📈 全部股票数量: {len(today_stock_df)}")
 
-        # 使用策略的筛选函数
-        mask = self.strategy._pick_filter(today_stock_df)
-        filtered_stocks = today_stock_df.filter(mask)
+        # 使用策略的筛选函数（传入numpy数组）
+        buy_params = self.buy_params
+        mask = _filter_numba(
+            today_stock_df['consecutive_up_days'].to_numpy(),
+            today_stock_df['change_3d'].to_numpy(),
+            today_stock_df['change_5d'].to_numpy(),
+            today_stock_df['change_pct'].to_numpy(),
+            today_stock_df['limit_up_count_10d'].to_numpy(),
+            today_stock_df['volume_ratio'].to_numpy(),
+            buy_params[0],  # buy_up_day_min
+            buy_params[1],  # buy_day3_min
+            buy_params[2],  # buy_day5_min
+            buy_params[3] if len(buy_params) > 3 else 5,  # change_pct_max
+            buy_params[4] if len(buy_params) > 4 else -1,  # limit_up_count_min
+            buy_params[5] if len(buy_params) > 5 else -1   # volume_ratio_min
+        )
+        filtered_stocks = today_stock_df.filter(pl.Series(mask))
 
         if filtered_stocks.is_empty():
             print(f"😢 没有符合筛选条件的股票")
@@ -78,12 +116,12 @@ class StockPicker:
 
         print(f"🔍 筛选后股票数量: {len(filtered_stocks)}")
 
-        # 限制结果数量并按成交额排序
+        # 限制结果数量
         n = min(self.max_hold, len(filtered_stocks))
         if n > 0:
-            # 按成交额降序排序并取前n只
-            result = filtered_stocks.sort("amount", descending=True).head(n)
-            print(f"✅ 选出 {n} 只股票（按成交额排序）:\n")
+            # 数据已按成交量升序排列，直接取前n个
+            result = filtered_stocks.head(n)
+            print(f"✅ 选出 {n} 只股票（按成交量升序，冷门股）:\n")
 
             # 显示结果
             print(f"{'代码':<10} {'收盘':<10} {'连涨':<8} {'3日涨幅':<12} {'5日涨幅':<12} {'当日涨幅':<10}")

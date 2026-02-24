@@ -11,6 +11,45 @@ from dto import *
 import logger_config
 
 @njit(cache=True)
+def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
+                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min, volume_ratio_min):
+    """Numba JIT 编译的筛选函数
+    limit_up_count_min: 涨停次数要求，-1表示不限制，0表示10天内0涨停，1表示10天内≥1次涨停
+    buy_up_day_min: 连涨天数要求，-1表示不限制
+    buy_day3_min: 3日涨幅要求，-1表示不限制
+    buy_day5_min: 5日涨幅要求，-1表示不限制
+    change_pct_max: 当日涨幅上限，-1表示不限制
+    volume_ratio_min: 量比要求，-1表示不限制
+    """
+    n = len(up_days)
+    result = np.empty(n, dtype=np.bool_)
+    for i in range(n):
+        # 连涨天数条件（-1表示不限制）
+        up_ok = (buy_up_day_min == -1) or (up_days[i] >= buy_up_day_min)
+        # 3日涨幅条件（-1表示不限制）
+        day3_ok = (buy_day3_min == -1) or (change_3d[i] > buy_day3_min)
+        # 5日涨幅条件（-1表示不限制）
+        day5_ok = (buy_day5_min == -1) or (change_5d[i] > buy_day5_min)
+        # 当日涨幅上限条件（-1表示不限制）
+        pct_ok = (change_pct_max == -1) or (change_pct[i] < change_pct_max)
+        # 量比条件（-1表示不限制）
+        volume_ok = (volume_ratio_min == -1) or (volume_ratio[i] > volume_ratio_min)
+
+        base_ok = up_ok and day3_ok and day5_ok and pct_ok and volume_ok
+
+        # 涨停次数条件（-1表示不限制，0表示10天内0涨停，1表示10天内≥1次涨停）
+        if limit_up_count_min == -1:
+            result[i] = base_ok
+        elif limit_up_count_min == 0:
+            # 0表示要求0次涨停（即排除有涨停的股票）
+            result[i] = base_ok and (limit_up_count_10d[i] == 0)
+        else:
+            # 1表示要求至少1次涨停
+            result[i] = base_ok and (limit_up_count_10d[i] >= 1)
+    return result
+
+
+@njit(cache=True)
 def _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr, base_amount):
     """Numba JIT 编译的买入股数计算函数 - 固定比例模式
     base_amount: 固定买入金额（分）
@@ -53,17 +92,16 @@ def _check_sell_numba(buy_price, highest_price, hold_days,
         return True, stop_loss_price
 
     # 2. 贪婪止盈
-    if hold_days <= hold_days_limit:
-        # 持仓天数内未达标，卖出
-        if close_price < target_return_price:
+    # 阶段1：已达到目标收益，启用移动止盈（不再限制持仓天数）
+    if highest_price >= target_return_price:
+        if open_price <= trailing_stop_price:
             return True, open_price
-    else:
-        # 移动止盈
-        if highest_price > 0:
-            if open_price <= trailing_stop_price:
-                return True, open_price
-            if low_price <= trailing_stop_price:
-                return True, trailing_stop_price
+        if low_price <= trailing_stop_price:
+            return True, trailing_stop_price
+    
+    # 阶段2：持仓到期且未达到目标，强制卖出
+    if hold_days >= hold_days_limit:
+        return True, open_price
 
     return False, 0
 
@@ -97,8 +135,6 @@ class Strategy:
         self.buy_param_arr = buy_param_arr
         self.pick_param_arr = pick_param_arr if pick_param_arr else [0, 1]
         self.init_amount, self.max_hold_count = base_param_arr[0], base_param_arr[1]
-        # base_param_arr扩展参数：买卖顺序
-        self.buy_first = base_param_arr[2] if len(base_param_arr) > 2 else 1  # 1=先买后卖, 0=先卖后买
         # 预计算卖出参数（避免每次重复计算）
         stop_loss_rate, hold_days_limit, target_return, trailing_rate = sell_param_arr
         self._stop_loss_rate = stop_loss_rate / 100.0
@@ -123,18 +159,37 @@ class Strategy:
             sys.exit(1)
     
     def _init_pick_filter(self) -> None:
-        """初始化筛选函数，子类重写"""
-        def default_filter(df: pl.DataFrame) -> pl.Series:
-            """默认筛选：返回所有股票"""
-            return pl.Series([True] * len(df))
-        self._pick_filter = default_filter
+        """初始化连涨策略筛选函数"""
+        buy_up_day_min = self.buy_param_arr[0]
+        buy_day3_min = self.buy_param_arr[1]
+        buy_day5_min = self.buy_param_arr[2]
+        change_pct_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else 5
+        limit_up_count_min = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else -1
+        volume_ratio_min = self.buy_param_arr[5] if len(self.buy_param_arr) > 5 else -1
+
+        def filter_func(numpy_data: dict):
+            mask = _filter_numba(
+                numpy_data['consecutive_up_days'],
+                numpy_data['change_3d'],
+                numpy_data['change_5d'],
+                numpy_data['change_pct'],
+                numpy_data['limit_up_count_10d'],
+                numpy_data['volume_ratio'],
+                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min, volume_ratio_min
+            )
+            return mask
+        self._pick_filter = filter_func
 
     def _init_pick_sorter(self) -> None:
-        """初始化排序函数，子类重写"""
-        def default_sorter(df: pl.DataFrame) -> pl.DataFrame:
-            """默认排序：返回原数据"""
-            return df
-        self._pick_sorter = default_sorter
+        """初始化排序函数
+        数据已按成交量升序排列，直接使用无需排序
+        """
+        def sorter_func(filtered_data: dict) -> np.ndarray:
+            """返回排序后的索引数组（输入已是筛选后的数据）"""
+            n = len(filtered_data['code'])
+            # 数据已按成交量升序排列，直接使用
+            return np.arange(n, dtype=np.int64)
+        self._pick_sorter = sorter_func
     
     def bind(self, data: sd, calendar: sc) -> None:
         """绑定数据和日历对象"""
@@ -479,11 +534,11 @@ class Strategy:
             if sell_price == stop_loss_price:
                 stop_loss_rate = self._stop_loss_rate * 100
                 reason = f"止损|买价{buy_price_yuan:.2f}|止损率{stop_loss_rate:.0f}%|止损价{stop_loss_price/100:.2f}|开{open_price/100:.2f}|低{low_price/100:.2f}"
-            elif hold_days <= self._hold_days_limit:
+            elif hold_days >= self._hold_days_limit:
                 target_return_pct = self._target_return * 100
                 close_yuan = close_price / 100
                 target_yuan = target_return_price / 100
-                reason = f"未达标|持仓{hold_days}天/限{self._hold_days_limit}天|目标{target_return_pct:.0f}%|目标价{target_yuan:.2f}|收{close_yuan:.2f}"
+                reason = f"到期|持仓{hold_days}天/限{self._hold_days_limit}天|目标{target_return_pct:.0f}%|目标价{target_yuan:.2f}|收{close_yuan:.2f}"
             else:
                 # 移动止盈 - 区分开盘回落还是盘中回落
                 trailing_rate_pct = self._trailing_rate * 100
@@ -577,21 +632,22 @@ class Strategy:
                 平均资金使用率=0
             )
         
-        # 预加载当日持仓数据到缓存
-        data_cache = self._today_data_cache
-        
-        # 计算最终投资组合价值（当前持有股票价值 + 现金）
+        # 结算时强制卖出所有持仓，使用最后一天的收盘价
         final_holdings_value = 0
-        for hold_stock in hold:
-            code = hold_stock.code
-            stock_data = data_cache.get(code)
-            # 检查数据是否为空或无效
-            if stock_data is None:
-                # 如果今天没有数据，使用买入价格作为估值
-                final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
-            else:
-                # stock_data 现在是 tuple: (open, close, high, low)
-                final_holdings_value += stock_data[1] * hold_stock.buy_count
+        if hold:
+            # 使用最后一天的日期获取数据
+            last_date = self.today
+            for hold_stock in hold:
+                code = hold_stock.code
+                # 从数据源获取最后一天的收盘价
+                stock_data_dict = self.data.get_data_by_date_code(last_date, code)
+                if stock_data_dict is None:
+                    # 如果没有数据，使用买入价格作为估值
+                    final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
+                else:
+                    # 使用收盘价估值
+                    close_price = stock_data_dict['close']
+                    final_holdings_value += close_price * hold_stock.buy_count
         
         # 最终总价值（分）
         free_amount = self.free_amount

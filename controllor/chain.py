@@ -10,7 +10,7 @@ from tqdm import tqdm
 from local_cache import LocalCache
 
 from dto import *
-from strategy_impl import *
+from strategy import Strategy
 
 # 导入日志配置
 import logger_config
@@ -125,7 +125,7 @@ class Chain:
         # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰，设置最小更新间隔减少输出频率
         for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True, mininterval=1):
             count+=1
-            strategy = UpStrategy(**params)
+            strategy = Strategy(**params)
             results = []
             failure_count = 0
             all_daily_values = []
@@ -426,12 +426,9 @@ class Chain:
         while current_idx != -1 and current_idx <= end_idx:
             current_date = scalendar.get_date(current_idx)
             strategy.update_today(current_date)
-            if strategy.buy_first:
-                strategy.buy()
-                strategy.sell()
-            else:
-                strategy.sell()
-                strategy.buy()
+            # 固定先卖后买
+            strategy.sell()
+            strategy.buy()
             strategy.pick()
             strategy.settle_amount()
             current_idx = scalendar.next(current_idx)
@@ -543,7 +540,7 @@ class Chain:
         for params in tqdm(self.param_generator.get_slice_params(start_idx, end_idx),
                           desc=f"进程 {thread_id} 执行策略", total=param_count, position=thread_id, leave=True, mininterval=1):
             count += 1
-            strategy = UpStrategy(**params)
+            strategy = Strategy(**params)
             results = []
             failure_count = 0
             all_daily_values = []

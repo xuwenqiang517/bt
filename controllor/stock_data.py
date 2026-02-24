@@ -70,10 +70,10 @@ class StockData:
                     values=self.calc_up_days(df["close"].to_numpy()),  # 转为numpy数组适配原函数
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
                 ),
-                # 计算15/20/30天内涨停次数（涨幅>=9.9%）
-                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=15).cast(pl.Int8).alias("limit_up_count_15d"),
-                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=20).cast(pl.Int8).alias("limit_up_count_20d"),
-                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=30).cast(pl.Int8).alias("limit_up_count_30d")
+                # 计算10天内涨停次数（涨幅>=9.9%），短线关注10天即可
+                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=10).cast(pl.Int8).alias("limit_up_count_10d"),
+                # 计算量比：当日成交量 / MA5成交量，用于判断量能变化
+                (pl.col("volume") / pl.col("ma5_vol")).round(2).cast(pl.Float32).alias("volume_ratio")
             ]).drop(["ma5_vol", "ma10_vol"]).collect()
         
         return df_tech
@@ -88,7 +88,7 @@ class StockData:
                 trade_date = trade_date[0]
             if group is None or group.is_empty():
                 continue
-            group = group.sort("amount", descending=True)
+            group = group.sort("volume", descending=False)  # 按成交量升序排列（选冷门股）
             date_dict[trade_date] = group
 
             # 统一数据结构：NumPy数组 + code到索引的映射
@@ -106,9 +106,8 @@ class StockData:
                 'change_3d': group['change_3d'].to_numpy(),
                 'change_5d': group['change_5d'].to_numpy(),
                 'change_pct': group['change_pct'].to_numpy(),
-                'limit_up_count_15d': group['limit_up_count_15d'].to_numpy(),
-                'limit_up_count_20d': group['limit_up_count_20d'].to_numpy(),
-                'limit_up_count_30d': group['limit_up_count_30d'].to_numpy(),
+                'limit_up_count_10d': group['limit_up_count_10d'].to_numpy(),
+                'volume_ratio': group['volume_ratio'].to_numpy(),
                 'amount': group['amount'].to_numpy(),
                 '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
             }

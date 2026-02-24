@@ -68,31 +68,36 @@ def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count
 
 
 def str2dict(strategy_params):
-    # 格式: 持仓数量,买卖顺序,仓位模式,仓位值|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停次数|排序字段,排序方式|止损率,持仓天数,目标涨幅,回撤率
-    # 示例: 3,1,0,0|2,10,15,5,0|0,1|-15,2,8,3
+    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停条件,量比|止损率,持仓天数,目标涨幅,回撤率
+    # 示例: 1|2,3,3,1,0,1.5|-5,2,5,7
+    # 涨停条件: -1=不限, 0=10天内0涨停(排除涨停股), 1=10天内≥1次涨停
+    # 量比: -1=不限, 1=放量, 1.5=明显放量, 2=大幅放量
     parts = strategy_params.strip().split("|")
     base_arr = parts[0]
     buy_arr = parts[1]
-    pick_arr = parts[2] if len(parts) > 2 else "0,1"
-    sell_arr = parts[3] if len(parts) > 3 else "-15,2,8,3"
+    sell_arr = parts[2] if len(parts) > 2 else "-8,2,5,7"
 
-    # 解析基础参数，新格式：只保留持仓数量（动态仓位）
-    base_params = list(map(int, base_arr.split(",")))
-    hold_count = base_params[0]
-    buy_first = 0  # 固定先卖后买
+    # 解析基础参数：只保留持仓数量
+    hold_count = int(base_arr)
 
-    # 解析买入参数，新格式6个参数：连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停天数选择,涨停次数
-    buy_params = list(map(int, buy_arr.split(",")))
+    # 解析买入参数，6个参数：连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停条件,量比
+    buy_params_raw = buy_arr.split(",")
+    buy_params = []
+    for i, v in enumerate(buy_params_raw):
+        if i == 5:  # 量比可能是小数
+            buy_params.append(float(v))
+        else:
+            buy_params.append(int(v))
     if len(buy_params) < 6:
         # 补齐默认值
-        defaults = [2, 8, 8, 3, 1, 0]  # 连涨2天,3日8%,5日8%,涨幅上限3%,20天,0次涨停
+        defaults = [2, 8, 8, 3, -1, -1]
         buy_params.extend(defaults[len(buy_params):])
 
     strategy_params_list = []
     strategy_params_list.append({
-        "base_param_arr": [10000000, hold_count, buy_first],
+        "base_param_arr": [10000000, hold_count],
         "buy_param_arr": buy_params,
-        "pick_param_arr": list(map(int, pick_arr.split(","))),
+        "pick_param_arr": [],  # 排序固定为成交量升序
         "sell_param_arr": list(map(int, sell_arr.split(","))),
         "debug": 1
     })
@@ -117,10 +122,10 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    2|2,8,-1,2,4,2|0,1|-15,2,4,2
+    2|-1,3,5,3,0,1.5|-8,3,5,3
     """
 
-    bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000000)
+    bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
