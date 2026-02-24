@@ -104,27 +104,25 @@ class Chain:
             print(f"图表保存成功，文件大小: {os.path.getsize(save_path) if os.path.exists(save_path) else 0} bytes")
 
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
-        """处理一组策略"""
-        # 为每个进程创建独立的缓存
+        """处理一组策略 - 批量累积优化"""
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
-        
-        # 在子进程中初始化 stock_data 和 calendar
         stock_data = sd(force_refresh=self.force_refresh)
         calendar = sc()
-        is_debug=self.chain_debug
-        
-        # 加载进程本地缓存
+        is_debug = self.chain_debug
         cache_filename = f"a_{thread_result_file}"
         cached_a_df = self._load_cache(cache, cache_filename)
-        fail_count=self.fail_count
-        
-        # 计算固定值，避免在循环中重复计算
+        fail_count = self.fail_count
         total_count = len(self.date_arr)
-        count=0
-        # 处理策略组，添加进度条，为每个进程指定不同位置避免干扰，设置最小更新间隔减少输出频率
-        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", total=len(strategy_group), position=thread_id, leave=True, mininterval=1):
-            count+=1
+        
+        # 批量累积配置
+        BATCH_SIZE = 50  # 每50个策略合并一次
+        pending_rows = []
+        count = 0
+        
+        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", 
+                          total=len(strategy_group), position=thread_id, leave=True, mininterval=1):
+            count += 1
             strategy = Strategy(**params)
             results = []
             failure_count = 0
@@ -135,24 +133,20 @@ class Chain:
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
                     all_daily_values.extend(strategy.daily_values)
 
-                # 过滤条件：收益率为负 或 最大回撤超过20%（最小资金<初始资金80%）
                 init_amount = params.get('base_param_arr')[0]
                 max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
 
                 if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
-                    # 被过滤的策略不加入结果列表
                     continue
                 results.append(result)
 
             if failure_count > fail_count and not is_debug:
-                # print(f"[DEBUG] 策略被跳过: failure_count={failure_count}, fail_count={fail_count}, is_debug={is_debug}")
                 continue
 
-            successful_count=total_count-failure_count
+            successful_count = total_count - failure_count
             actual_win_rate = successful_count / total_count if results else 0
 
-            # 跑年连续周期 20250101-20260101（根据run_year参数决定是否执行）
             year_result = None
             if self.run_year:
                 try:
@@ -160,31 +154,43 @@ class Chain:
                 except Exception as e:
                     print(f"年周期执行失败: {e}")
 
-            # 构建配置字符串：只保留可调整参数（持仓数量|买入参数|排序参数|卖出参数）
             base_arr = params.get('base_param_arr')
-            # 只保留持仓数量（动态仓位，去掉仓位比例）
             base_config = [base_arr[1]]
-            cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
+            cache_key = "|".join(",".join(map(str, arr)) for arr in 
+                               [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
             new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
-            # print(new_row)
+            
             if is_debug:
-                if 'new_row' in locals():
-                    print(f"进程 {thread_id}: {new_row}")
+                print(f"进程 {thread_id}: {new_row}")
                 self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
             
-            # 直接将new_row转换为DataFrame并处理
-            new_data_df = pl.DataFrame([new_row])
-            if cached_a_df.is_empty():
-                cached_a_df = new_data_df
-            else:
-                cached_a_df = self._merge_and_sort_data(cached_a_df, new_data_df)
+            pending_rows.append(new_row)
             
-            if count%5==0:
-                # 保存到缓存
-                cached_a_df = self._sort_data(cached_a_df)
+            # 批量合并，减少 Polars concat 次数
+            if len(pending_rows) >= BATCH_SIZE:
+                cached_a_df = self._batch_merge_rows(cached_a_df, pending_rows)
+                pending_rows = []
                 self._save_cache(cache, cache_filename, cached_a_df)
+        
+        # 处理剩余数据
+        if pending_rows:
+            cached_a_df = self._batch_merge_rows(cached_a_df, pending_rows)
+        
         cached_a_df = self._sort_data(cached_a_df)
         self._save_cache(cache, cache_filename, cached_a_df)
+
+    def _batch_merge_rows(self, cached_a_df: pl.DataFrame, rows: list) -> pl.DataFrame:
+        """批量合并多行数据到 DataFrame"""
+        if not rows:
+            return cached_a_df
+        
+        new_data_df = pl.DataFrame(rows)
+        if cached_a_df.is_empty():
+            return new_data_df
+        
+        # 一次性合并，避免多次 concat
+        merged = pl.concat([cached_a_df, new_data_df], rechunk=True)
+        return self._sort_data(merged)
 
     def _create_empty_a_df(self) -> pl.DataFrame:
         """创建空的a文件DataFrame"""

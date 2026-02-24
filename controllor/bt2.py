@@ -1,7 +1,7 @@
 from stock_calendar import StockCalendar as sc
 from chain import Chain
 import random
-from itertools import product
+from param_config import parse_strategy_string, build_strategy_string
 
 # 导入日志配置（会自动重定向 stdout 到文件）
 import logger_config
@@ -67,46 +67,15 @@ def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count
         chain.execute_generator_mode()
 
 
-def str2dict(strategy_params):
-    # 格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停条件,量比|排序方向|止损率,持仓天数,目标涨幅,回撤率
-    # 示例: 1|2,3,3,1,0,1.5|1|-5,2,5,7
-    # 涨停条件: -1=不限, 0=10天内0涨停(排除涨停股), 1=10天内≥1次涨停
-    # 量比: -1=不限, 1=放量, 1.5=明显放量, 2=大幅放量
-    # 排序方向: 0=成交量升序(冷门股), 1=成交量降序(热门股)
-    # 清理所有空白字符（包括换行、空格、制表符）
-    cleaned = ''.join(strategy_params.split())
-    parts = cleaned.split("|")
-    base_arr = parts[0]
-    buy_arr = parts[1]
-    pick_arr = parts[2] if len(parts) > 3 else "0"
-    sell_arr = parts[3] if len(parts) > 3 else "-8,2,5,7"
-
-    # 解析基础参数：只保留持仓数量
-    hold_count = int(base_arr)
-
-    # 解析买入参数，6个参数：连涨天数,3日涨幅,5日涨幅,涨幅上限,涨停条件,量比
-    buy_params_raw = buy_arr.split(",")
-    buy_params = []
-    for i, v in enumerate(buy_params_raw):
-        if i == 5:  # 量比可能是小数
-            buy_params.append(float(v))
-        else:
-            buy_params.append(int(v))
-    if len(buy_params) < 6:
-        # 补齐默认值
-        defaults = [2, 8, 8, 3, -1, -1]
-        buy_params.extend(defaults[len(buy_params):])
-
-    strategy_params_list = []
-    strategy_params_list.append({
-        "base_param_arr": [10000000, hold_count],
-        "buy_param_arr": buy_params,
-        "pick_param_arr": [int(pick_arr)],  # 排序方向: 0=升序(冷门), 1=降序(热门)
-        "sell_param_arr": list(map(int, sell_arr.split(","))),
-        "debug": 1
-    })
-    print(strategy_params_list)
-    return strategy_params_list
+def str2dict(strategy_params: str) -> list:
+    """
+    将策略参数字符串解析为字典列表（单策略）
+    使用 param_config 中的统一解析函数
+    """
+    params = parse_strategy_string(strategy_params)
+    params["debug"] = 1  # 单策略模式开启调试
+    print([params])
+    return [params]
 
 
 def bt_one(strategy_params, day_array, run_year=False):

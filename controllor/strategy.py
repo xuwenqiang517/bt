@@ -108,13 +108,34 @@ def _check_sell_numba(buy_price, highest_price, hold_days,
 # 全局常量
 EMPTY_STRING = ""
 
-# 全局选票缓存结构（两级缓存）：
-# _global_filter_cache: {filter_key -> {date -> filtered_data}} 筛选缓存（只依赖买入参数）
-# _global_sort_cache: {sort_key -> {date -> sorted_data}} 排序缓存（依赖选股参数）
-_global_filter_cache: dict[tuple, dict[int, dict]] = {}
-_global_sort_cache: dict[tuple, dict[int, dict]] = {}
-_global_current_filter_key: tuple = ()
-_global_current_sort_key: tuple = ()
+# 进程级选票缓存结构（两级缓存）：
+# 每个进程独立维护自己的缓存，避免多进程序列化开销
+class PickCache:
+    """进程内选股缓存管理器"""
+    __slots__ = ['filter_cache', 'sort_cache', 'current_filter_key', 'current_sort_key']
+    
+    def __init__(self):
+        self.filter_cache: dict[tuple, dict[int, dict]] = {}
+        self.sort_cache: dict[tuple, dict[int, dict]] = {}
+        self.current_filter_key: tuple = ()
+        self.current_sort_key: tuple = ()
+    
+    def clear(self):
+        """清理所有缓存"""
+        self.filter_cache.clear()
+        self.sort_cache.clear()
+        self.current_filter_key = ()
+        self.current_sort_key = ()
+
+# 每个进程独立的缓存实例（多进程时每个进程有自己的实例）
+_process_pick_cache: PickCache | None = None
+
+def _get_pick_cache() -> PickCache:
+    """获取当前进程的缓存实例"""
+    global _process_pick_cache
+    if _process_pick_cache is None:
+        _process_pick_cache = PickCache()
+    return _process_pick_cache
 
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
@@ -238,42 +259,38 @@ class Strategy:
         第一级：筛选缓存（按买入参数）
         第二级：排序缓存（按买入+选股参数）
         """
-        global _global_filter_cache, _global_sort_cache
-        global _global_current_filter_key, _global_current_sort_key
-
+        cache = _get_pick_cache()
         today = self.today
         filter_key = self._filter_key
         sort_key = self._sort_key
 
         # 检查排序缓存（第二级缓存，命中率最高）
-        if today in _global_sort_cache.get(sort_key, {}):
-            self.picked_numpy_data = _global_sort_cache[sort_key][today]
+        if today in cache.sort_cache.get(sort_key, {}):
+            self.picked_numpy_data = cache.sort_cache[sort_key][today]
             if self.debug:
                 count = len(self.picked_numpy_data['code']) if self.picked_numpy_data else 0
                 print(f"日期 {today} 选出股票 {count} 只 (排序缓存)")
             return
 
         # 检查筛选缓存（第一级缓存）
-        if today in _global_filter_cache.get(filter_key, {}):
-            filtered_data = _global_filter_cache[filter_key][today]
+        if today in cache.filter_cache.get(filter_key, {}):
+            filtered_data = cache.filter_cache[filter_key][today]
             if self.debug:
                 print(f"日期 {today} 使用筛选缓存，重新排序")
         else:
             # 筛选参数变化，清理所有缓存
-            if filter_key != _global_current_filter_key:
-                _global_filter_cache.clear()
-                _global_sort_cache.clear()
-                _global_current_filter_key = filter_key
-                _global_current_sort_key = ()
+            if filter_key != cache.current_filter_key:
+                cache.clear()
+                cache.current_filter_key = filter_key
                 if self.debug:
                     print(f"筛选参数变化，清理所有缓存: {filter_key}")
 
             numpy_data = self.data.get_numpy_data_by_date(today)
             if numpy_data is None or len(numpy_data['code']) == 0:
                 self.picked_numpy_data = None
-                if sort_key not in _global_sort_cache:
-                    _global_sort_cache[sort_key] = {}
-                _global_sort_cache[sort_key][today] = None
+                if sort_key not in cache.sort_cache:
+                    cache.sort_cache[sort_key] = {}
+                cache.sort_cache[sort_key][today] = None
                 if self.debug:
                     print(f"日期 {today} 无符合条件股票")
                 return
@@ -281,9 +298,9 @@ class Strategy:
             mask = self._pick_filter(numpy_data)
             if not mask.any():
                 self.picked_numpy_data = None
-                if sort_key not in _global_sort_cache:
-                    _global_sort_cache[sort_key] = {}
-                _global_sort_cache[sort_key][today] = None
+                if sort_key not in cache.sort_cache:
+                    cache.sort_cache[sort_key] = {}
+                cache.sort_cache[sort_key][today] = None
                 if self.debug:
                     print(f"日期 {today} 无符合条件股票")
                 return
@@ -306,9 +323,9 @@ class Strategy:
             }
 
             # 存入筛选缓存
-            if filter_key not in _global_filter_cache:
-                _global_filter_cache[filter_key] = {}
-            _global_filter_cache[filter_key][today] = filtered_data
+            if filter_key not in cache.filter_cache:
+                cache.filter_cache[filter_key] = {}
+            cache.filter_cache[filter_key][today] = filtered_data
 
         # 使用排序器对筛选结果排序
         sorted_indices = self._pick_sorter(filtered_data)
@@ -320,10 +337,10 @@ class Strategy:
         }
 
         # 存入排序缓存
-        if sort_key not in _global_sort_cache:
-            _global_sort_cache[sort_key] = {}
-        _global_sort_cache[sort_key][today] = self.picked_numpy_data
-        _global_current_sort_key = sort_key
+        if sort_key not in cache.sort_cache:
+            cache.sort_cache[sort_key] = {}
+        cache.sort_cache[sort_key][today] = self.picked_numpy_data
+        cache.current_sort_key = sort_key
 
         if self.debug:
             codes_list = list(self.picked_numpy_data['code'])
