@@ -54,7 +54,7 @@ class Chain:
         safe_title = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fa5]', '_', title)
         # 截取前50个字符，避免文件名过长
         safe_title = safe_title[:50]
-        file_name = f"fund_trend_{safe_title}.png"
+        file_name = f"{safe_title}.png"
         save_path = data_dir / file_name
         
         # 提取日期和资金值（将分转换为元）
@@ -162,7 +162,7 @@ class Chain:
             
             if is_debug:
                 print(f"进程 {thread_id}: {new_row}")
-                self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
+                self._draw_fund_trend(all_daily_values, f'资金趋势 - {cache_key}')
             
             pending_rows.append(new_row)
             

@@ -24,7 +24,7 @@ def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count
     from datetime import datetime
     day_array = sc().get_date_arr()
     current_time = datetime.now().strftime("%m%d_%H%M")
-    result_file = f"all_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-最多失败{fail_count}-{current_time}"
+    result_file = f"all_{current_time}"
 
     if strategy_params is not None:
         # 指定参数模式 - 直接解析
@@ -95,14 +95,15 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    1|2,7,6,3,-1,1|0|-10,5,12,6
+    1|3,-1,20,4,0,1|0|-10,9,15,8
     """
 
-    bt_all(processor_count=4, fail_count=1, strategy_params=None, max_strategy_count=1000000000000)
+    # bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
     # bt_one(s,[[20250101,20260101]])
+    bt_one(s,[[20250101,20260226]])
     
 
 # /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py

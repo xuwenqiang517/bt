@@ -196,8 +196,9 @@ def main():
     if len(sys.argv) > 1:
         config = sys.argv[1]
     else:
-        config = "1|2,7,6,3,-1,1|1|-10,5,12,6"  # 默认配置
-    
+        # config = "1|-1,-1,2,5,0,-1|0|-12,10,5,5"  # 默认配置
+        # config = "1|5,9,12,3,0,1|0|-15,15,5,4" # 85胜率
+        config = "1|3,-1,20,4,0,1|0|-8,9,15,10" #87胜率
     picker = StockPicker(config)
     picker.pick()
 

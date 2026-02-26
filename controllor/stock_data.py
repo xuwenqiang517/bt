@@ -55,8 +55,10 @@ class StockData:
                 # # 计算成交量排名
                 # pl.col("volume").rank(descending=True, method="min").cast(pl.Int16).alias("volume_rank"),
                 # 涨跌幅是float32，直接计算
-                pl.col("change_pct").rolling_sum(window_size=3).round(2).cast(pl.Float32).alias("change_3d"),
-                pl.col("change_pct").rolling_sum(window_size=5).round(2).cast(pl.Float32).alias("change_5d"),
+                # 3日涨幅: (今日收盘 - 3天前收盘) / 3天前收盘 * 100
+                ((pl.col("close") - pl.col("close").shift(3)) / pl.col("close").shift(3) * 100).round(2).cast(pl.Float32).alias("change_3d"),
+                # 5日涨幅: (今日收盘 - 5天前收盘) / 5天前收盘 * 100 (同花顺口径)
+                ((pl.col("close") - pl.col("close").shift(5)) / pl.col("close").shift(5) * 100).round(2).cast(pl.Float32).alias("change_5d"),
                 # 计算价格限制状态：0=正常，1=涨停，2=跌停
                 pl.when(pl.col("open").shift(-1) >= pl.col("close") * 1.095)
                 .then(pl.lit(1))
@@ -227,7 +229,7 @@ class StockData:
 
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        # cache.clean(prefix="stock_data_")
+        cache.clean(prefix="stock_data_")
         return stock_data
 
 
