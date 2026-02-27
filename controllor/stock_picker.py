@@ -13,8 +13,8 @@ class StockPicker:
         """
         选股器初始化
         config_str: 格式 "持仓数量|买入参数|排序方向|卖出参数"
-        例如: "1|2,7,6,3|0|-12,4,2,7"
-        买入参数: 连涨天数,3日涨幅,5日涨幅,涨幅上限 (4个参数)
+        例如: "1|2,7,6,3,5|0|-12,4,2,7"
+        买入参数: 连涨天数,3日涨幅,5日涨幅,涨幅上限,振幅上限 (5个参数)
         排序方向: 0=成交量升序(冷门股), 1=成交量降序(热门股)
         注意: 量比(>1)、涨停条件(0次)已内置，不再作为参数
         """
@@ -44,6 +44,7 @@ class StockPicker:
             "3日涨幅>": f"{self.buy_params[1]}%" if self.buy_params[1] > 0 else "不限",
             "5日涨幅>": f"{self.buy_params[2]}%" if self.buy_params[2] > 0 else "不限",
             "当日涨幅<": f"{self.buy_params[3]}%" if self.buy_params[3] > 0 else "不限",
+            "日内振幅<": f"{self.buy_params[4]}%" if len(self.buy_params) > 4 and self.buy_params[4] > 0 else "不限",
             "涨停条件": "10天0涨停(内置)",
             "量比>": "1(内置)",
             "排序": "成交量降序（热门股）" if sort_desc == 1 else "成交量升序（冷门股）"
@@ -194,6 +195,8 @@ def main():
         # config = "1|5,9,12,3,0,1|0|-15,15,5,4" # 85胜率
         # config = "1|3,-1,20,4,0,1|0|-8,9,15,10" #87胜率
         config = "1|-1,8,18,4,0,1|1|-8,5,11,7" 
+        config = "2|3,6,14,2|0|-8,8,8,3" 
+        
         
     picker = StockPicker(config)
     picker.pick()

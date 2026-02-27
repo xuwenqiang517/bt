@@ -22,6 +22,7 @@ class ParamGenerator:
         self.buy_day3_range = self.config.buy_day3_range
         self.buy_day5_range = self.config.buy_day5_range
         self.change_pct_max_range = self.config.change_pct_max_range
+        self.amplitude_max_range = self.config.amplitude_max_range
         # limit_up_count_range 和 volume_ratio_range 已内置到筛选逻辑中
         self.sort_desc_range = self.config.sort_desc_range
         self.sell_stop_loss_range = self.config.sell_stop_loss_range
@@ -46,6 +47,7 @@ class ParamGenerator:
             self.buy_day3_range,        # 3日涨幅
             self.buy_day5_range,        # 5日涨幅
             self.change_pct_max_range,  # 涨幅上限
+            self.amplitude_max_range,   # 振幅上限
         ]
         # 选股排序参数（影响排序缓存）
         pick_ranges = [
@@ -73,27 +75,28 @@ class ParamGenerator:
             remaining //= size
         indices.reverse()
 
-        # 买入参数（0-3）
+        # 买入参数（0-4）
         buy1 = self.buy_up_day_range[indices[0]]
         buy2 = self.buy_day3_range[indices[1]]
         buy3 = self.buy_day5_range[indices[2]]
         buy4 = self.change_pct_max_range[indices[3]]
+        buy5 = self.amplitude_max_range[indices[4]]
 
-        # 选股排序参数（4）
-        sort_desc = self.sort_desc_range[indices[4]]
+        # 选股排序参数（5）
+        sort_desc = self.sort_desc_range[indices[5]]
 
-        # 基础参数（5）- 只保留持仓数量
-        hold_count = self.hold_count_range[indices[5]]
+        # 基础参数（6）- 只保留持仓数量
+        hold_count = self.hold_count_range[indices[6]]
 
-        # 卖出参数（6-9）
-        sell1 = self.sell_stop_loss_range[indices[6]]
-        sell2 = self.sell_hold_days_range[indices[7]]
-        sell3 = self.sell_target_return_range[indices[8]]
-        sell4 = self.sell_trailing_range[indices[9]]
+        # 卖出参数（7-10）
+        sell1 = self.sell_stop_loss_range[indices[7]]
+        sell2 = self.sell_hold_days_range[indices[8]]
+        sell3 = self.sell_target_return_range[indices[9]]
+        sell4 = self.sell_trailing_range[indices[10]]
 
         return {
             "base_param_arr": [10000000, hold_count],
-            "buy_param_arr": [buy1, buy2, buy3, buy4],
+            "buy_param_arr": [buy1, buy2, buy3, buy4, buy5],
             "pick_param_arr": [sort_desc],
             "sell_param_arr": [sell1, sell2, sell3, sell4],
             "debug": 0
@@ -109,12 +112,13 @@ class ParamGenerator:
         为指定工作进程获取参数切片
         按买入参数组分配，确保每个进程内的买入参数连续，提高缓存命中率
         """
-        # 计算买入参数组合数（量比、涨停条件已内置）
+        # 计算买入参数组合数（量比、涨停条件已内置，振幅已加入）
         buy_combo_size = (
             len(self.buy_up_day_range) *
             len(self.buy_day3_range) *
             len(self.buy_day5_range) *
-            len(self.change_pct_max_range)
+            len(self.change_pct_max_range) *
+            len(self.amplitude_max_range)
         )
         # 每个买入参数对应的基础+卖出参数组合数
         base_sell_combo_size = self.total_count // buy_combo_size

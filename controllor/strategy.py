@@ -11,13 +11,14 @@ from dto import *
 import logger_config
 
 @njit(cache=True)
-def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
-                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max):
+def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio, amplitude,
+                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, amplitude_max):
     """Numba JIT 编译的筛选函数
     buy_up_day_min: 连涨天数要求，-1表示不限制
     buy_day3_min: 3日涨幅要求，-1表示不限制
     buy_day5_min: 5日涨幅要求，-1表示不限制
     change_pct_max: 当日涨幅上限，-1表示不限制
+    amplitude_max: 日内振幅上限，-1表示不限制
     量比: 已内置固定>1
     涨停条件: 已内置固定为0（10天内无涨停）
     """
@@ -36,8 +37,10 @@ def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d,
         volume_ok = volume_ratio[i] > 1.0
         # 涨停条件：内置固定为0（10天内无涨停）
         limit_ok = limit_up_count_10d[i] == 0
+        # 日内振幅条件（-1表示不限制）
+        amplitude_ok = (amplitude_max == -1) or (amplitude[i] < amplitude_max)
 
-        result[i] = up_ok and day3_ok and day5_ok and pct_ok and volume_ok and limit_ok
+        result[i] = up_ok and day3_ok and day5_ok and pct_ok and volume_ok and limit_ok and amplitude_ok
     return result
 
 
@@ -179,6 +182,7 @@ class Strategy:
         buy_day3_min = self.buy_param_arr[1]
         buy_day5_min = self.buy_param_arr[2]
         change_pct_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else 5
+        amplitude_max = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else 5
 
         def filter_func(numpy_data: dict):
             mask = _filter_numba(
@@ -188,7 +192,8 @@ class Strategy:
                 numpy_data['change_pct'],
                 numpy_data['limit_up_count_10d'],
                 numpy_data['volume_ratio'],
-                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max
+                numpy_data['amplitude'],
+                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, amplitude_max
             )
             return mask
         self._pick_filter = filter_func

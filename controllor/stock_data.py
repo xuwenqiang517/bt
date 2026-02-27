@@ -75,7 +75,9 @@ class StockData:
                 # 计算10天内涨停次数（涨幅>=9.9%），短线关注10天即可
                 (pl.col("change_pct") >= 9.9).rolling_sum(window_size=10).cast(pl.Int8).alias("limit_up_count_10d"),
                 # 计算量比：当日成交量 / MA5成交量，用于判断量能变化
-                (pl.col("volume") / pl.col("ma5_vol")).round(2).cast(pl.Float32).alias("volume_ratio")
+                (pl.col("volume") / pl.col("ma5_vol")).round(2).cast(pl.Float32).alias("volume_ratio"),
+                # 计算日内振幅：(high - low) / close * 100
+                ((pl.col("high") - pl.col("low")) / pl.col("close") * 100).round(2).cast(pl.Float32).alias("amplitude")
             ]).drop(["ma5_vol", "ma10_vol"]).collect()
         
         return df_tech
@@ -85,6 +87,20 @@ class StockData:
         date_dict = {}
         self.date_numpy_dict = {}
         grouped = stock_data_df.group_by("date")
+
+        # 打印前10个交易日的股票数量统计
+        print("\n📊 前10个交易日股票数量统计:")
+        print("-" * 40)
+        all_dates = sorted([d[0] if isinstance(d, tuple) else d for d, _ in grouped])
+        for trade_date in all_dates[:10]:
+            group = stock_data_df.filter(pl.col("date") == trade_date)
+            count = len(group)
+            print(f"  {trade_date}: {count:4d} 只股票")
+        print("-" * 40)
+        print(f"  数据范围: {all_dates[0]} 至 {all_dates[-1]}")
+        print(f"  总交易日: {len(all_dates)} 天")
+        print(f"  数据滚动窗口: 约 {len(all_dates)} 个交易日\n")
+
         for trade_date, group in grouped:
             if isinstance(trade_date, tuple):
                 trade_date = trade_date[0]
@@ -110,6 +126,7 @@ class StockData:
                 'change_pct': group['change_pct'].to_numpy(),
                 'limit_up_count_10d': group['limit_up_count_10d'].to_numpy(),
                 'volume_ratio': group['volume_ratio'].to_numpy(),
+                'amplitude': group['amplitude'].to_numpy(),
                 'amount': group['amount'].to_numpy(),
                 '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
             }

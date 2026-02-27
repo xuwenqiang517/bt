@@ -15,22 +15,23 @@ class ParamRanges:
     注意：量比(>1)、涨停条件(0次)已内置，不再作为参数
     """
     # 基础参数
-    hold_count_range: List[int] = field(default_factory=lambda: [1])  # 持仓数量
+    hold_count_range: List[int] = field(default_factory=lambda: [1,2])  # 持仓数量
     
-    # 买入参数（6个）- 根据回测结果精简
+    # 买入参数（5个）- 根据回测结果精简
     buy_up_day_range: List[int] = field(default_factory=lambda: [-1,1,2,3])  # 连涨天数: 2,3天最优，5天测试
     buy_day3_range: List[int] = field(default_factory=lambda: [-1,1,2,3,4,5,6,7,8])  # 3日涨幅%: 结果证明此参数无关，固定-1
     buy_day5_range: List[int] = field(default_factory=lambda: [-1,8,10,12,14,16,18,20])  # 5日涨幅%: 12%起步，15%和20%是核心
     change_pct_max_range: List[int] = field(default_factory=lambda: [-1,1,2,3,4,5,6,7,8,9])  # 当日涨幅上限%: 4%最优，6%和8%测试
+    amplitude_max_range: List[int] = field(default_factory=lambda: [-1,3,4,5,6,7,8])  # 日内振幅上限%: ≤5%过滤掉过度波动，-1表示不限制
     # 涨停条件已内置固定为0（10天内无涨停），不再作为参数
     # 量比已内置到筛选逻辑中（默认>1），不再作为参数
-    
+
     # 选股排序参数（1个）
     sort_desc_range: List[int] = field(default_factory=lambda: [0, 1])  # 排序方向, 0=成交量升序(冷门股), 1=成交量降序(热门股)
-    
+
     # 卖出参数（4个）- 根据回测结果精简
-    sell_stop_loss_range: List[int] = field(default_factory=lambda: [-8,-10,-12])  # 止损率%: -10最优，-8/-12对比
-    sell_hold_days_range: List[int] = field(default_factory=lambda: [2,3,4,5,6,7,8,9])  # 持仓天数: 9天最优，7/12/15对比
+    sell_stop_loss_range: List[int] = field(default_factory=lambda: [-5,-8,-10,-12])  # 止损率%: -10最优，-8/-12对比
+    sell_hold_days_range: List[int] = field(default_factory=lambda: [2,3,4,5,6,7,8,9,10,11,12])  # 持仓天数: 9天最优，7/12/15对比
     sell_target_return_range: List[int] = field(default_factory=lambda: [3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20])  # 目标涨幅%: 15%和18%最优，22%测试
     sell_trailing_range: List[int] = field(default_factory=lambda: [3,4,5,6,7,8,9,10])  # 回撤止盈率%: 10%最优，6%和8%对比
     
@@ -44,6 +45,7 @@ class ParamRanges:
             self.buy_day3_range,
             self.buy_day5_range,
             self.change_pct_max_range,
+            self.amplitude_max_range,
         ]
     
     def get_pick_ranges(self) -> List[List[Any]]:
@@ -80,8 +82,8 @@ DEFAULT_PARAM_RANGES = ParamRanges()
 def parse_strategy_string(strategy_str: str) -> Dict[str, Any]:
     """
     从字符串解析策略参数
-    格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限|排序方向|止损率,持仓天数,目标涨幅,回撤率
-    示例: 1|2,7,6,3|0|-10,5,12,6
+    格式: 持仓数量|连涨天数,3日涨幅,5日涨幅,涨幅上限,振幅上限|排序方向|止损率,持仓天数,目标涨幅,回撤率
+    示例: 1|2,7,6,3,5|0|-10,5,12,6
     注意：量比、涨停条件已内置，不再作为参数
     """
     cleaned = ''.join(strategy_str.split())
@@ -94,10 +96,10 @@ def parse_strategy_string(strategy_str: str) -> Dict[str, Any]:
 
     hold_count = int(base_arr)
 
-    # 解析买入参数（4个参数，量比和涨停条件已内置）
+    # 解析买入参数（5个参数，量比和涨停条件已内置）
     buy_params_raw = buy_arr.split(",")
-    if len(buy_params_raw) != 4:
-        raise ValueError(f"买入参数必须是4个，当前提供了 {len(buy_params_raw)} 个: {buy_arr}")
+    if len(buy_params_raw) != 5:
+        raise ValueError(f"买入参数必须是5个，当前提供了 {len(buy_params_raw)} 个: {buy_arr}")
 
     buy_params = [int(v) for v in buy_params_raw]
 
@@ -113,10 +115,10 @@ def parse_strategy_string(strategy_str: str) -> Dict[str, Any]:
 def build_strategy_string(base_arr: list, buy_arr: list, pick_arr: list, sell_arr: list) -> str:
     """
     从参数数组构建策略字符串
-    注意：buy_arr包含4个参数（量比、涨停条件已内置，不作为参数）
+    注意：buy_arr包含5个参数（量比、涨停条件已内置，不作为参数）
     """
     base_str = str(base_arr[1])  # 只保留持仓数量
-    buy_str = ",".join(str(x) for x in buy_arr)  # 4个买入参数
+    buy_str = ",".join(str(x) for x in buy_arr)  # 5个买入参数
     pick_str = str(pick_arr[0]) if pick_arr else "0"
     sell_str = ",".join(str(x) for x in sell_arr)
     return f"{base_str}|{buy_str}|{pick_str}|{sell_str}"
