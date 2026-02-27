@@ -12,14 +12,14 @@ import logger_config
 
 @njit(cache=True)
 def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
-                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min, volume_ratio_min):
+                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max):
     """Numba JIT 编译的筛选函数
-    limit_up_count_min: 涨停次数要求，-1表示不限制，0表示10天内0涨停，1表示10天内≥1次涨停
     buy_up_day_min: 连涨天数要求，-1表示不限制
     buy_day3_min: 3日涨幅要求，-1表示不限制
     buy_day5_min: 5日涨幅要求，-1表示不限制
     change_pct_max: 当日涨幅上限，-1表示不限制
-    volume_ratio_min: 量比要求，-1表示不限制
+    量比: 已内置固定>1
+    涨停条件: 已内置固定为0（10天内无涨停）
     """
     n = len(up_days)
     result = np.empty(n, dtype=np.bool_)
@@ -32,20 +32,12 @@ def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d,
         day5_ok = (buy_day5_min == -1) or (change_5d[i] > buy_day5_min)
         # 当日涨幅上限条件（-1表示不限制）
         pct_ok = (change_pct_max == -1) or (change_pct[i] < change_pct_max)
-        # 量比条件（-1表示不限制）
-        volume_ok = (volume_ratio_min == -1) or (volume_ratio[i] > volume_ratio_min)
+        # 量比条件：内置固定>1
+        volume_ok = volume_ratio[i] > 1.0
+        # 涨停条件：内置固定为0（10天内无涨停）
+        limit_ok = limit_up_count_10d[i] == 0
 
-        base_ok = up_ok and day3_ok and day5_ok and pct_ok and volume_ok
-
-        # 涨停次数条件（-1表示不限制，0表示10天内0涨停，1表示10天内≥1次涨停）
-        if limit_up_count_min == -1:
-            result[i] = base_ok
-        elif limit_up_count_min == 0:
-            # 0表示要求0次涨停（即排除有涨停的股票）
-            result[i] = base_ok and (limit_up_count_10d[i] == 0)
-        else:
-            # 1表示要求至少1次涨停
-            result[i] = base_ok and (limit_up_count_10d[i] >= 1)
+        result[i] = up_ok and day3_ok and day5_ok and pct_ok and volume_ok and limit_ok
     return result
 
 
@@ -180,13 +172,13 @@ class Strategy:
             sys.exit(1)
     
     def _init_pick_filter(self) -> None:
-        """初始化连涨策略筛选函数"""
+        """初始化连涨策略筛选函数
+        注意：量比(>1)、涨停条件(0次)已内置，不再从参数中读取
+        """
         buy_up_day_min = self.buy_param_arr[0]
         buy_day3_min = self.buy_param_arr[1]
         buy_day5_min = self.buy_param_arr[2]
         change_pct_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else 5
-        limit_up_count_min = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else -1
-        volume_ratio_min = self.buy_param_arr[5] if len(self.buy_param_arr) > 5 else -1
 
         def filter_func(numpy_data: dict):
             mask = _filter_numba(
@@ -196,7 +188,7 @@ class Strategy:
                 numpy_data['change_pct'],
                 numpy_data['limit_up_count_10d'],
                 numpy_data['volume_ratio'],
-                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, limit_up_count_min, volume_ratio_min
+                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max
             )
             return mask
         self._pick_filter = filter_func

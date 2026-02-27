@@ -95,15 +95,15 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    1|3,-1,20,4,0,1|0|-10,9,15,8
+    1|-1,8,18,4,0,1|1|-8,5,11,7
     """
 
-    # bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000000)
+    bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000000)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])
     # bt_one(s,[[20250101,20260101]])
-    bt_one(s,[[20250101,20260226]])
+    # bt_one(s,[[20250101,20260226]])
     
 
 # /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py

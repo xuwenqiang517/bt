@@ -139,6 +139,25 @@ class StockData:
     
 
     
+    def get_hs300_codes(self, cache, today):
+        """获取沪深300成分股代码列表，带日期缓存"""
+        cache_file_name = f"hs300_cons_{today}"
+        hs300_df = cache.get(cache_file_name)
+        
+        if hs300_df is None:
+            try:
+                # 使用akshare获取沪深300成分股权重数据
+                hs300_df = ak.index_stock_cons_weight_csindex(symbol="000300")
+                # 只保留成分股代码列
+                hs300_df = hs300_df[["成分券代码"]]
+                hs300_df.columns = ["code"]
+                cache.set(cache_file_name, hs300_df)
+            except Exception as e:
+                print(f"获取沪深300成分股失败: {e}")
+                return set()
+        
+        return set(hs300_df["code"].astype(str).tolist())
+
     def get_stock_list(self,today,cache):
         cache_file_name="stock_list_"+today
         cache.clean(prefix="stock_list_",ignore=[cache_file_name])
@@ -170,6 +189,15 @@ class StockData:
             stock_list_pl = stock_list_pl.filter(
                 ~pl.col("名称").str.contains("ST")
             )
+            
+            # 过滤掉沪深300成分股（只保留中小股）
+            print(f"2.1 过滤沪深300成分股")
+            hs300_codes = self.get_hs300_codes(cache, today)
+            if hs300_codes:
+                stock_list_pl = stock_list_pl.filter(
+                    ~pl.col("代码").is_in(list(hs300_codes))
+                )
+                print(f"   排除沪深300成分股 {len(hs300_codes)} 只")
             
             # 重命名列，保持股票代码为字符串类型
             stock_list_pl = stock_list_pl.rename({"代码": "code", "名称": "name"})

@@ -5,6 +5,7 @@ import numpy as np
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
 from strategy import Strategy, _filter_numba
+from param_config import parse_strategy_string, DEFAULT_PARAM_RANGES
 
 
 class StockPicker:
@@ -12,24 +13,20 @@ class StockPicker:
         """
         选股器初始化
         config_str: 格式 "持仓数量|买入参数|排序方向|卖出参数"
-        例如: "1|2,3,3,1,0,1|0|-12,4,2,7"
+        例如: "1|2,7,6,3|0|-12,4,2,7"
+        买入参数: 连涨天数,3日涨幅,5日涨幅,涨幅上限 (4个参数)
         排序方向: 0=成交量升序(冷门股), 1=成交量降序(热门股)
+        注意: 量比(>1)、涨停条件(0次)已内置，不再作为参数
         """
         self.config_str = config_str
-        parts = config_str.split("|")
 
-        # 解析参数（支持3段旧格式和4段新格式）
-        self.base_params = [10000000, int(parts[0])]  # 初始资金、最大持仓
-        self.buy_params = list(map(int, parts[1].split(",")))
-        if len(parts) >= 4:
-            # 新格式: 持仓|买入|排序|卖出
-            self.pick_params = [int(parts[2])]
-            self.sell_params = list(map(int, parts[3].split(",")))
-        else:
-            # 旧格式: 持仓|买入|卖出
-            self.pick_params = [0]  # 默认升序
-            self.sell_params = list(map(int, parts[2].split(",")))
-        self.max_hold = int(parts[0])
+        # 使用param_config中的函数解析策略字符串
+        parsed = parse_strategy_string(config_str)
+        self.base_params = parsed["base_param_arr"]
+        self.buy_params = parsed["buy_param_arr"]
+        self.pick_params = parsed["pick_param_arr"]
+        self.sell_params = parsed["sell_param_arr"]
+        self.max_hold = self.base_params[1]
 
         # 创建Strategy实例，复用其筛选和排序逻辑
         self.strategy = Strategy(
@@ -41,16 +38,14 @@ class StockPicker:
         )
 
         # 构建筛选条件描述
-        limit_up_desc = {-1: "不限", 0: "10天0涨停", 1: "10天≥1涨停"}
-        volume_ratio_val = self.buy_params[5] if len(self.buy_params) > 5 else -1
         sort_desc = self.pick_params[0] if len(self.pick_params) > 0 else 0
         self._filter_params = {
             "连涨天数≥": self.buy_params[0] if self.buy_params[0] > 0 else "不限",
             "3日涨幅>": f"{self.buy_params[1]}%" if self.buy_params[1] > 0 else "不限",
             "5日涨幅>": f"{self.buy_params[2]}%" if self.buy_params[2] > 0 else "不限",
             "当日涨幅<": f"{self.buy_params[3]}%" if self.buy_params[3] > 0 else "不限",
-            "涨停条件": limit_up_desc.get(self.buy_params[4] if len(self.buy_params) > 4 else -1, "不限"),
-            "量比>": f"{volume_ratio_val}" if volume_ratio_val > 0 else "不限",
+            "涨停条件": "10天0涨停(内置)",
+            "量比>": "1(内置)",
             "排序": "成交量降序（热门股）" if sort_desc == 1 else "成交量升序（冷门股）"
         }
 
@@ -113,9 +108,8 @@ class StockPicker:
             buy_params[0],  # buy_up_day_min
             buy_params[1],  # buy_day3_min
             buy_params[2],  # buy_day5_min
-            buy_params[3] if len(buy_params) > 3 else 5,  # change_pct_max
-            buy_params[4] if len(buy_params) > 4 else -1,  # limit_up_count_min
-            buy_params[5] if len(buy_params) > 5 else -1   # volume_ratio_min
+            buy_params[3] if len(buy_params) > 3 else 5  # change_pct_max
+            # 量比(>1)、涨停条件(0次)已内置，不再作为参数
         )
         filtered_stocks = today_stock_df.filter(pl.Series(mask))
 
@@ -198,7 +192,9 @@ def main():
     else:
         # config = "1|-1,-1,2,5,0,-1|0|-12,10,5,5"  # 默认配置
         # config = "1|5,9,12,3,0,1|0|-15,15,5,4" # 85胜率
-        config = "1|3,-1,20,4,0,1|0|-8,9,15,10" #87胜率
+        # config = "1|3,-1,20,4,0,1|0|-8,9,15,10" #87胜率
+        config = "1|-1,8,18,4,0,1|1|-8,5,11,7" 
+        
     picker = StockPicker(config)
     picker.pick()
 
