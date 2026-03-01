@@ -18,6 +18,16 @@ class StockData:
         cache=lc()
         print(f"1. 获取股票列表")
         stock_list_df=self.get_stock_list(str(today),cache)
+        # 构建股票代码到名称的缓存字典（支持str和int两种key）
+        self.code_to_name = {}
+        for _, row in stock_list_df.iterrows():
+            code_str = str(row['code'])
+            name = row['name']
+            self.code_to_name[code_str] = name
+            # 如果code是纯数字，也缓存int类型的key
+            if code_str.isdigit():
+                self.code_to_name[int(code_str)] = name
+        print(f"   已缓存 {len(stock_list_df)} 只股票名称")
         print(f"2. 获取股票数据")
         stock_data_df=self.get_stock_data_pl(stock_list_df,str(today),cache,force_refresh)
         print(f"3. 计算技术指标")
@@ -41,7 +51,7 @@ class StockData:
 
     def calc_tech_pl(self,df: pl.DataFrame) -> pl.DataFrame:
         df_tech = df.lazy().with_columns([
-                # 计算涨跌幅和下一天开盘价
+                # 计算涨跌幅和下一天开盘价/收盘价
                 ((pl.col("close") - pl.col("close").shift(1)) / pl.col("close").shift(1) * 100).round(2).fill_null(0).cast(pl.Float32).alias("change_pct"),
                 pl.col("open").shift(-1).alias("next_open"),
                 # 计算成交金额
@@ -73,11 +83,11 @@ class StockData:
                     dtype=pl.Int8  # 使用int8存储连续上涨天数
                 ),
                 # 计算10天内涨停次数（涨幅>=9.9%），短线关注10天即可
-                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=10).cast(pl.Int8).alias("limit_up_count_10d"),
+                # null值填充为99（表示不满足无涨停条件）
+                (pl.col("change_pct") >= 9.9).rolling_sum(window_size=10).cast(pl.Int8).fill_null(99).alias("limit_up_count_10d"),
                 # 计算量比：当日成交量 / MA5成交量，用于判断量能变化
                 (pl.col("volume") / pl.col("ma5_vol")).round(2).cast(pl.Float32).alias("volume_ratio"),
-                # 计算日内振幅：(high - low) / close * 100
-                ((pl.col("high") - pl.col("low")) / pl.col("close") * 100).round(2).cast(pl.Float32).alias("amplitude")
+                # 日内振幅参数已移除（回测证明效果不明显）
             ]).drop(["ma5_vol", "ma10_vol"]).collect()
         
         return df_tech
@@ -126,7 +136,6 @@ class StockData:
                 'change_pct': group['change_pct'].to_numpy(),
                 'limit_up_count_10d': group['limit_up_count_10d'].to_numpy(),
                 'volume_ratio': group['volume_ratio'].to_numpy(),
-                'amplitude': group['amplitude'].to_numpy(),
                 'amount': group['amount'].to_numpy(),
                 '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
             }
@@ -152,10 +161,25 @@ class StockData:
             'price_limit_status': day_data['price_limit_status'][idx]
         }
 
+    def get_stock_name(self, code: int | str) -> str:
+        """根据股票代码获取股票名称"""
+        # 先尝试直接用code作为key查找（支持int和str）
+        name = self.code_to_name.get(code)
+        if name:
+            return name
+        # 如果没找到，转为str再查找
+        return self.code_to_name.get(str(code), str(code))
 
-    
+    def get_stock_display(self, code: int | str) -> str:
+        """获取股票代码+名称的展示字符串"""
+        code_str = str(code)
+        # 先尝试直接用code作为key查找
+        name = self.code_to_name.get(code)
+        if not name:
+            # 如果没找到，转为str再查找
+            name = self.code_to_name.get(code_str, '')
+        return f"{code_str} {name}" if name else code_str
 
-    
     def get_hs300_codes(self, cache, today):
         """获取沪深300成分股代码列表，带日期缓存"""
         cache_file_name = f"hs300_cons_{today}"
@@ -274,7 +298,7 @@ class StockData:
 
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        cache.clean(prefix="stock_data_")
+        # cache.clean(prefix="stock_data_")
         return stock_data
 
 

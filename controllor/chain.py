@@ -103,6 +103,226 @@ class Chain:
             print(f"资金变化图表已保存到: {save_path}")
             print(f"图表保存成功，文件大小: {os.path.getsize(save_path) if os.path.exists(save_path) else 0} bytes")
 
+    def _draw_trade_details(self, trades_history, daily_values, title, stock_data=None):
+        """绘制交易明细图表，在资金曲线上直接标注完整交易信息"""
+        if not trades_history or not daily_values:
+            if self.chain_debug:
+                print("没有交易数据，跳过交易明细图")
+            return
+
+        from pathlib import Path
+        import os
+
+        # 计算保存路径
+        data_dir = Path(__file__).resolve().parent.parent / "./data"
+        os.makedirs(data_dir, exist_ok=True)
+
+        # 生成文件名
+        import re
+        safe_title = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fa5]', '_', title)
+        safe_title = safe_title[:50]
+        file_name = f"{safe_title}.png"
+        save_path = data_dir / file_name
+
+        # 准备数据
+        dates = [f"{dv['date']:08d}" for dv in daily_values]
+        values = [dv['value'] / 100 for dv in daily_values]
+        date_to_idx = {dv['date']: i for i, dv in enumerate(daily_values)}
+
+        # 调试：打印1117-1119期间的数据
+        if self.chain_debug:
+            print("\n=== 调试：daily_values 数据 ===")
+            for dv in daily_values:
+                d = dv['date']
+                if 20251115 <= d <= 20251122:
+                    holdings = dv.get('holdings', [])
+                    hold_info = ', '.join([f"{h['code']}({h['profit_rate']:.2%})" for h in holdings]) if holdings else '空仓'
+                    print(f"日期 {d}: 总资产 {dv['value']/100:.2f}, 持仓: {hold_info}")
+
+        # 创建数值索引用于画图（避免字符串日期导致的分类轴问题）
+        x_indices = list(range(len(dates)))
+        idx_to_date = {i: dates[i] for i in range(len(dates))}
+
+        # 收集每只股票的持仓期间盈亏率
+        stock_holdings = {}
+        for dv in daily_values:
+            date = dv['date']
+            if date not in date_to_idx:
+                continue
+            date_idx = date_to_idx[date]
+            holdings = dv.get('holdings', [])
+            for h in holdings:
+                code = h['code']
+                profit_rate = h['profit_rate'] * 100
+                if code not in stock_holdings:
+                    stock_holdings[code] = []
+                stock_holdings[code].append((date_idx, profit_rate))
+
+        # 设置中文字体
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'WenQuanYi Micro Hei']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        # 创建图表 - 单张大图显示所有信息
+        fig, ax1 = plt.subplots(figsize=(42, 18))
+
+        # ===== 主图：资金曲线 =====
+        # 使用数值索引画图，避免字符串日期导致的分类轴问题
+        ax1.plot(x_indices, values, label='总资产', linewidth=2, color='navy', alpha=0.8)
+
+        # 标注所有交易（不跳过任何交易）
+        for i, trade in enumerate(trades_history):
+            sell_date = trade['date']
+            buy_date = trade['buy_date']
+            if sell_date not in date_to_idx or buy_date not in date_to_idx:
+                continue
+
+            sell_idx = date_to_idx[sell_date]
+            buy_idx = date_to_idx[buy_date]
+            x_sell = x_indices[sell_idx]  # 使用数值索引
+            y_sell = values[sell_idx]
+            x_buy = x_indices[buy_idx]    # 使用数值索引
+            y_buy = values[buy_idx]
+
+            code = trade['code']
+            buy_price = trade['buy_price'] / 100
+            sell_price = trade['sell_price'] / 100
+            profit_rate = trade['profit_rate'] * 100
+            profit = trade['profit'] / 100
+            reason = trade.get('reason', '')
+
+            # 计算持仓天数
+            hold_days = sell_idx - buy_idx
+
+            # 获取股票名称
+            if stock_data:
+                stock_name = stock_data.get_stock_name(code)
+                name_short = stock_name[:4] if len(stock_name) > 4 else stock_name
+            else:
+                name_short = str(code)[-6:]
+
+            # 简化卖出原因（区分止盈类型）
+            simple_reason = ''
+            if '止损' in reason:
+                simple_reason = '止损'
+            elif '到期' in reason:
+                if '盈利' in reason:
+                    simple_reason = '到期盈'
+                else:
+                    simple_reason = '到期亏'
+            elif '止盈' in reason or '回落' in reason:
+                # 区分开盘回落和盘中回落
+                if '开盘回落' in reason:
+                    simple_reason = '开盘回落止盈'
+                elif '盘中回落' in reason:
+                    simple_reason = '盘中回落止盈'
+                else:
+                    simple_reason = '回落止盈'
+
+            # 根据盈亏选择颜色（A股习惯：涨红跌绿）
+            trade_color = 'red' if profit > 0 else 'green'
+
+            # 标注买入点（蓝色）和卖出点（黄色统一）
+            ax1.scatter([x_buy], [y_buy], color='blue', marker='>', s=100, zorder=5)
+            ax1.scatter([x_sell], [y_sell], color='gold', marker='s', s=100, zorder=5)
+
+            # 计算标注位置：上下交替
+            is_top = i % 2 == 0  # 偶数交易在上方，奇数在下方
+
+            # 构建多行标注框内容
+            buy_date_str = str(buy_date)[4:]
+            sell_date_str = str(sell_date)[4:]
+
+            # 四行格式：
+            # 第一行：股票代码+股票名称
+            # 第二行：买入时间+买入价格
+            # 第三行：卖出时间+卖出价格
+            # 第四行：收益率+持仓天数+卖出原因
+            full_label = (
+                f'{code} {name_short}\n'
+                f'买:{buy_date_str} {buy_price:.2f}元\n'
+                f'卖:{sell_date_str} {sell_price:.2f}元\n'
+                f'{profit_rate:+.1f}% | {hold_days}天 | {simple_reason}'
+            )
+
+            # 计算标注框位置（在买入卖出中间上方或下方）
+            mid_x = (x_buy + x_sell) / 2  # 买入卖出日期的中间
+            mid_y = (y_buy + y_sell) / 2  # 买入卖出资金的中间
+
+            # 动态计算垂直偏移，避免框重叠
+            # 根据交易密度调整间距
+            trade_span = x_sell - x_buy  # 交易跨度（天数）
+            base_offset = max(60, min(100, trade_span * 8))  # 基础偏移：60-100像素
+
+            if is_top:
+                # 标注在上方，逐层递增
+                y_offset = base_offset + (i % 3) * 35  # 3层循环
+                va_align = 'bottom'
+            else:
+                # 标注在下方，逐层递增
+                y_offset = -base_offset - (i % 3) * 35
+                va_align = 'top'
+
+            # 标注框的绝对位置
+            box_x = mid_x
+            box_y = mid_y + y_offset * (max(values) - min(values)) / 800 if len(values) > 1 else mid_y + y_offset
+
+            # 根据上下位置调整弧线方向，避免交叉
+            if is_top:
+                rad_buy = 0.15
+                rad_sell = -0.15
+            else:
+                rad_buy = -0.15
+                rad_sell = 0.15
+
+            # 先画从标注框到买入点的箭头（蓝色）
+            ax1.annotate('', xy=(x_buy, y_buy), xytext=(box_x, box_y),
+                        arrowprops=dict(arrowstyle='->', color='blue', lw=1.2, connectionstyle=f'arc3,rad={rad_buy}'))
+
+            # 再画从标注框到卖出点的箭头（黄色统一）
+            ax1.annotate('', xy=(x_sell, y_sell), xytext=(box_x, box_y),
+                        arrowprops=dict(arrowstyle='->', color='orange', lw=1.2, connectionstyle=f'arc3,rad={rad_sell}'))
+
+            # 最后画标注框
+            ax1.text(box_x, box_y, full_label, fontsize=7, color='black',
+                    ha='center', va='center',
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.95,
+                             edgecolor=trade_color, lw=2))
+
+        ax1.set_ylabel('资金（元）', fontsize=12, color='navy')
+        ax1.set_xlabel('日期', fontsize=12)
+        ax1.set_title(f'{title} - 资金曲线与交易明细（共{len(trades_history)}笔交易）', fontsize=16)
+        ax1.grid(True, alpha=0.3)
+        ax1.ticklabel_format(style='plain', axis='y')
+
+        # 调整日期标签 - 使用数值索引但显示日期字符串
+        if len(dates) > 40:
+            step = len(dates) // 40
+            tick_indices = x_indices[::step]
+            tick_labels = dates[::step]
+            ax1.set_xticks(tick_indices)
+            ax1.set_xticklabels(tick_labels)
+        else:
+            ax1.set_xticks(x_indices)
+            ax1.set_xticklabels(dates)
+        plt.setp(ax1.get_xticklabels(), rotation=45, ha='right', fontsize=9)
+
+        # 添加图例说明
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], marker='>', color='w', markerfacecolor='blue', markersize=10, label='买入点'),
+            Line2D([0], [0], marker='s', color='w', markerfacecolor='red', markersize=10, label='卖出点(盈利)'),
+            Line2D([0], [0], marker='s', color='w', markerfacecolor='green', markersize=10, label='卖出点(亏损)'),
+            Line2D([0], [0], color='navy', lw=2, label='总资产')
+        ]
+        ax1.legend(handles=legend_elements, loc='upper left', fontsize=10)
+
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+        if self.chain_debug:
+            print(f"交易明细图表已保存到: {save_path}")
+
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
         """处理一组策略 - 批量累积优化"""
         cache = LocalCache()
@@ -193,7 +413,7 @@ class Chain:
         return self._sort_data(merged)
 
     def _create_empty_a_df(self) -> pl.DataFrame:
-        """创建空的a文件DataFrame"""
+        """创建空的a文件DataFrame - 包含所有列确保类型一致"""
         return pl.DataFrame({
             '周期胜率': pl.Series([], dtype=pl.String),
             '平均胜率': pl.Series([], dtype=pl.String),
@@ -209,6 +429,10 @@ class Chain:
             '年最大资金': pl.Series([], dtype=pl.Float64),
             '年最小资金': pl.Series([], dtype=pl.Float64),
             '年交易次数': pl.Series([], dtype=pl.Float64),
+            '止损次数': pl.Series([], dtype=pl.Float64),
+            '到期盈利': pl.Series([], dtype=pl.Float64),
+            '到期亏损': pl.Series([], dtype=pl.Float64),
+            '回落止盈': pl.Series([], dtype=pl.Float64),
             '配置': pl.Series([], dtype=pl.String)
         })
     
@@ -222,14 +446,35 @@ class Chain:
         if not df.is_empty():
             cache.set_csv_pl(filename, df)
     
+    def _ensure_columns(self, df: pl.DataFrame) -> pl.DataFrame:
+        """确保DataFrame包含所有必需的列，兼容旧缓存文件"""
+        required_cols = {
+            '平均交易次数': pl.Float64,
+            '平均资金使用率': pl.String,
+            '年周期收益率': pl.String,
+            '年周期胜率': pl.String,
+            '年周期夏普': pl.Float64,
+            '年最大资金': pl.Float64,
+            '年最小资金': pl.Float64,
+            '年交易次数': pl.Float64,
+            '止损次数': pl.Float64,
+            '到期盈利': pl.Float64,
+            '到期亏损': pl.Float64,
+            '回落止盈': pl.Float64
+        }
+        for col, dtype in required_cols.items():
+            if col not in df.columns:
+                if dtype == pl.String:
+                    df = df.with_columns(pl.lit("").alias(col))
+                else:
+                    df = df.with_columns(pl.lit(0.0).alias(col))
+        return df
+
     def _merge_and_sort_data(self, target_df: pl.DataFrame, new_df: pl.DataFrame) -> pl.DataFrame:
         """合并数据并排序"""
-        # 确保必要的列存在（兼容旧缓存文件）
-        required_cols = ['平均交易次数', '平均资金使用率', '年周期收益率', '年周期胜率', 
-                        '年周期夏普', '年最大资金', '年最小资金', '年交易次数']
-        for col in required_cols:
-            if col not in target_df.columns:
-                target_df = target_df.with_columns(pl.lit(None).alias(col))
+        # 确保所有必要的列存在（兼容旧缓存文件）
+        target_df = self._ensure_columns(target_df)
+        new_df = self._ensure_columns(new_df)
         
         # 合并数据
         merged_df = pl.concat([target_df, new_df], rechunk=True)
@@ -269,6 +514,10 @@ class Chain:
                 "年最大资金": 0.0,
                 "年最小资金": 0.0,
                 "年交易次数": 0.0,
+                "止损次数": 0.0,
+                "到期盈利": 0.0,
+                "到期亏损": 0.0,
+                "回落止盈": 0.0,
                 "配置": cache_key
             }
 
@@ -276,23 +525,23 @@ class Chain:
         base_result = {
             "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
             "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
-            "平均收益率": f"{np.mean([x.总收益率 for x in results]) * 100:.2f}%",
-            "平均交易次数": float(round(np.mean([x.交易次数 for x in results]), 1)),
-            "最大资金": float(round(max([x.最大资金 for x in results]), 1)),
-            "最小资金": float(round(min([x.最小资金 for x in results]), 1)),
-            "夏普比率": float(round(np.mean([x.夏普比率 for x in results]), 2)),
-            "平均资金使用率": f"{np.mean([x.平均资金使用率 for x in results]) * 100:.2f}%",
+            "平均收益率": f"{float(np.mean([x.总收益率 for x in results])) * 100:.2f}%",
+            "平均交易次数": round(float(np.mean([x.交易次数 for x in results])), 1),
+            "最大资金": float(max([x.最大资金 for x in results])),
+            "最小资金": float(min([x.最小资金 for x in results])),
+            "夏普比率": round(float(np.mean([x.夏普比率 for x in results])), 2),
+            "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
             "配置": cache_key
         }
 
         # 年周期统计（如果有的话）
         if year_result:
             base_result.update({
-                "年周期收益率": f"{year_result.总收益率 * 100:.2f}%",
+                "年周期收益率": f"{float(year_result.总收益率) * 100:.2f}%",
                 "年周期胜率": f"{int(year_result.胜率 * 100)}%",
-                "年周期夏普": float(round(year_result.夏普比率, 2)),
-                "年最大资金": float(round(year_result.最大资金, 1)),
-                "年最小资金": float(round(year_result.最小资金, 1)),
+                "年周期夏普": round(float(year_result.夏普比率), 2),
+                "年最大资金": float(year_result.最大资金),
+                "年最小资金": float(year_result.最小资金),
                 "年交易次数": float(year_result.交易次数)
             })
         else:
@@ -303,6 +552,23 @@ class Chain:
                 "年最大资金": 0.0,
                 "年最小资金": 0.0,
                 "年交易次数": 0.0
+            })
+
+        # 卖出原因统计（只在年周期回测时有）
+        if year_result and hasattr(year_result, '卖出统计'):
+            sell_stats = year_result.卖出统计
+            base_result.update({
+                "止损次数": float(sell_stats.get('止损', 0)),
+                "到期盈利": float(sell_stats.get('到期盈利', 0)),
+                "到期亏损": float(sell_stats.get('到期亏损', 0)),
+                "回落止盈": float(sell_stats.get('回落止盈', 0))
+            })
+        else:
+            base_result.update({
+                "止损次数": 0.0,
+                "到期盈利": 0.0,
+                "到期亏损": 0.0,
+                "回落止盈": 0.0
             })
 
         return base_result
@@ -323,16 +589,7 @@ class Chain:
             # 加载进程缓存
             thread_a_df = cache.get_csv_pl(thread_cache_filename)
             if thread_a_df is not None and not thread_a_df.is_empty():
-                # 确保列顺序一致，避免concat时报错
-                if set(main_a_df.columns) != set(thread_a_df.columns):
-                    # 补齐缺失的列
-                    for col in main_a_df.columns:
-                        if col not in thread_a_df.columns:
-                            thread_a_df = thread_a_df.with_columns(pl.lit("").alias(col))
-                    for col in thread_a_df.columns:
-                        if col not in main_a_df.columns:
-                            main_a_df = main_a_df.with_columns(pl.lit("").alias(col))
-                # 按主进程的列顺序重新排列
+                # 按主进程的列顺序重新排列（所有进程列结构一致）
                 thread_a_df = thread_a_df.select(main_a_df.columns)
                 main_a_df = pl.concat([main_a_df, thread_a_df], rechunk=True)
                 # 删除已合并的进程缓存文件
@@ -440,7 +697,7 @@ class Chain:
             current_idx = scalendar.next(current_idx)
         
         result = strategy.calculate_performance(start_date, end_date)
-        
+
         if self.chain_debug:
             print("=" * 50)
             print(f"时间周期: {result.起始日期} 至 {result.结束日期}")
@@ -453,6 +710,8 @@ class Chain:
             print(f"夏普比率: {result.夏普比率:.2f}")
             print(f"平均资金使用率: {result.平均资金使用率*100:.2f}%")
             print("=" * 50)
+            # 绘制交易明细图表
+            self._draw_trade_details(strategy.trades_history, strategy.daily_values, f"交易明细_{start_date}_{end_date}", stock_data)
 
         return result
 

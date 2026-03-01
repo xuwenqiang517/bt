@@ -11,36 +11,43 @@ from dto import *
 import logger_config
 
 @njit(cache=True)
-def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio, amplitude,
-                  buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, amplitude_max):
+def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
+                  buy_up_day_min, buy_up_day_max, buy_day3_min, buy_day3_max, buy_day5_min, buy_day5_max, change_pct_max):
     """Numba JIT 编译的筛选函数
-    buy_up_day_min: 连涨天数要求，-1表示不限制
-    buy_day3_min: 3日涨幅要求，-1表示不限制
-    buy_day5_min: 5日涨幅要求，-1表示不限制
+    buy_up_day_min: 连涨天数下限要求，-1表示不限制
+    buy_up_day_max: 连涨天数上限要求，-1表示不限制（用于避免追高）
+    buy_day3_min: 3日涨幅下限要求，-1表示不限制
+    buy_day3_max: 3日涨幅上限要求，-1表示不限制（用于避免短期涨幅过大）
+    buy_day5_min: 5日涨幅下限要求，-1表示不限制
+    buy_day5_max: 5日涨幅上限要求，-1表示不限制（用于避免短期涨幅过大）
     change_pct_max: 当日涨幅上限，-1表示不限制
-    amplitude_max: 日内振幅上限，-1表示不限制
     量比: 已内置固定>1
     涨停条件: 已内置固定为0（10天内无涨停）
+    日内振幅参数已移除（回测证明效果不明显）
     """
     n = len(up_days)
     result = np.empty(n, dtype=np.bool_)
     for i in range(n):
-        # 连涨天数条件（-1表示不限制）
-        up_ok = (buy_up_day_min == -1) or (up_days[i] >= buy_up_day_min)
-        # 3日涨幅条件（-1表示不限制）
-        day3_ok = (buy_day3_min == -1) or (change_3d[i] > buy_day3_min)
-        # 5日涨幅条件（-1表示不限制）
-        day5_ok = (buy_day5_min == -1) or (change_5d[i] > buy_day5_min)
+        # 连涨天数下限条件（-1表示不限制）
+        up_min_ok = (buy_up_day_min == -1) or (up_days[i] >= buy_up_day_min)
+        # 连涨天数上限条件（-1表示不限制，用于避免追高）
+        up_max_ok = (buy_up_day_max == -1) or (up_days[i] <= buy_up_day_max)
+        # 3日涨幅下限条件（-1表示不限制）
+        day3_min_ok = (buy_day3_min == -1) or (change_3d[i] > buy_day3_min)
+        # 3日涨幅上限条件（-1表示不限制，用于避免短期涨幅过大）
+        day3_max_ok = (buy_day3_max == -1) or (change_3d[i] < buy_day3_max)
+        # 5日涨幅下限条件（-1表示不限制）
+        day5_min_ok = (buy_day5_min == -1) or (change_5d[i] > buy_day5_min)
+        # 5日涨幅上限条件（-1表示不限制，用于避免短期涨幅过大）
+        day5_max_ok = (buy_day5_max == -1) or (change_5d[i] < buy_day5_max)
         # 当日涨幅上限条件（-1表示不限制）
         pct_ok = (change_pct_max == -1) or (change_pct[i] < change_pct_max)
         # 量比条件：内置固定>1
         volume_ok = volume_ratio[i] > 1.0
         # 涨停条件：内置固定为0（10天内无涨停）
         limit_ok = limit_up_count_10d[i] == 0
-        # 日内振幅条件（-1表示不限制）
-        amplitude_ok = (amplitude_max == -1) or (amplitude[i] < amplitude_max)
 
-        result[i] = up_ok and day3_ok and day5_ok and pct_ok and volume_ok and limit_ok and amplitude_ok
+        result[i] = up_min_ok and up_max_ok and day3_min_ok and day3_max_ok and day5_min_ok and day5_max_ok and pct_ok and volume_ok and limit_ok
     return result
 
 
@@ -176,13 +183,15 @@ class Strategy:
     
     def _init_pick_filter(self) -> None:
         """初始化连涨策略筛选函数
-        注意：量比(>1)、涨停条件(0次)已内置，不再从参数中读取
+        注意：量比(>1)、涨停条件(0次)已内置，不再从参数中读取；日内振幅参数已移除
         """
         buy_up_day_min = self.buy_param_arr[0]
-        buy_day3_min = self.buy_param_arr[1]
-        buy_day5_min = self.buy_param_arr[2]
-        change_pct_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else 5
-        amplitude_max = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else 5
+        buy_up_day_max = self.buy_param_arr[1] if len(self.buy_param_arr) > 1 else -1
+        buy_day3_min = self.buy_param_arr[2] if len(self.buy_param_arr) > 2 else -1
+        buy_day3_max = self.buy_param_arr[3] if len(self.buy_param_arr) > 3 else -1
+        buy_day5_min = self.buy_param_arr[4] if len(self.buy_param_arr) > 4 else -1
+        buy_day5_max = self.buy_param_arr[5] if len(self.buy_param_arr) > 5 else -1
+        change_pct_max = self.buy_param_arr[6] if len(self.buy_param_arr) > 6 else 5
 
         def filter_func(numpy_data: dict):
             mask = _filter_numba(
@@ -192,8 +201,7 @@ class Strategy:
                 numpy_data['change_pct'],
                 numpy_data['limit_up_count_10d'],
                 numpy_data['volume_ratio'],
-                numpy_data['amplitude'],
-                buy_up_day_min, buy_day3_min, buy_day5_min, change_pct_max, amplitude_max
+                buy_up_day_min, buy_up_day_max, buy_day3_min, buy_day3_max, buy_day5_min, buy_day5_max, change_pct_max
             )
             return mask
         self._pick_filter = filter_func
@@ -228,6 +236,13 @@ class Strategy:
         self.trades_history: list[dict] = []
         self.daily_values: list[dict] = []
         self.today: int | None = None
+        # 卖出原因统计
+        self.sell_stats = {
+            '止损': 0,
+            '到期盈利': 0,
+            '到期亏损': 0,
+            '回落止盈': 0
+        }
     
     def _add_hold(self, hold_stock: HoldStock) -> None:
         """添加持仓股票"""
@@ -413,7 +428,8 @@ class Strategy:
                 free_amount = self.free_amount / 100
                 cost = stock_cost / 100
                 comm = commission / 100
-                print(f"日期 {today} 买入 {code} , {buy_price_with_slippage/100:.2f} * {buy_count} = {cost:.2f} (含滑点), 手续费{comm:.2f}, 剩余资金 {free_amount:.2f}")
+                code_display = self.data.get_stock_display(code) if self.data else str(code)
+                print(f"日期 {today} 买入 {code_display} , {buy_price_with_slippage/100:.2f} * {buy_count} = {cost:.2f} (含滑点), 手续费{comm:.2f}, 剩余资金 {free_amount:.2f}")
 
     def sell(self) -> None:
         is_debug=self.debug
@@ -445,23 +461,25 @@ class Strategy:
             if stock_data_dict is None:
                 if is_debug:
                     no_data_count += 1
-                    print(f"日期 {today} 股票 {code} 无数据,跳过卖出")
+                    code_display = self.data.get_stock_display(code) if self.data else str(code)
+                    print(f"日期 {today} 股票 {code_display} 无数据,跳过卖出")
                 continue
 
             if stock_data_dict['price_limit_status'] == 2:
                 if is_debug:
                     limit_down_count += 1
-                    print(f"日期 {today} 股票 {code} 跌停,无法卖出")
+                    code_display = self.data.get_stock_display(code) if self.data else str(code)
+                    print(f"日期 {today} 股票 {code_display} 跌停,无法卖出")
                 continue
 
             # 调用统一的卖出策略
-            need_sell, sell_price, reason = self._check_sell(hold_stock, stock_data_dict)
+            need_sell, sell_price, log_reason, stat_reason = self._check_sell(hold_stock, stock_data_dict)
             if is_debug:
                 buy_price = hold_stock.buy_price
-                reason = f"\033[91m{reason}\033[0m" if sell_price > buy_price else f"\033[92m{reason}\033[0m"
+                log_reason = f"\033[91m{log_reason}\033[0m" if sell_price > buy_price else f"\033[92m{log_reason}\033[0m"
 
             if need_sell:
-                sells_info.append((code, sell_price, reason))
+                sells_info.append((code, sell_price, log_reason, stat_reason))
 
         if is_debug and hold_length > 0:
             print(f"日期 {today} 卖出检查: 持仓{hold_length}只|跌停{limit_down_count}只|无数据{no_data_count}只|当日买入{skip_today_count}只|触发卖出{len(sells_info)}只")
@@ -473,7 +491,7 @@ class Strategy:
         # 批量处理卖出
         trades_history = self.trades_history
         for i in range(sells_info_length):
-            code, sell_price_raw, sell_reason = sells_info[i]
+            code, sell_price_raw, log_reason, stat_reason = sells_info[i]
             hold_stock = self._remove_hold(code)
             if hold_stock:
                 buy_price = hold_stock.buy_price
@@ -492,7 +510,11 @@ class Strategy:
                 self.free_amount += net_revenue
                 # 计算盈亏率
                 profit_rate = profit_cents / cost_cents if cost_cents > 0 else 0
-                
+
+                # 统计卖出原因
+                if stat_reason in self.sell_stats:
+                    self.sell_stats[stat_reason] += 1
+
                 # 记录交易历史
                 trades_history.append({
                     'date': today,
@@ -503,20 +525,23 @@ class Strategy:
                     'quantity': buy_count,
                     'profit': profit_cents,
                     'profit_rate': profit_rate,
-                    'reason': sell_reason
+                    'reason': log_reason
                 })
-                
+
                 if is_debug:
                     free_amount = self.free_amount / 100
                     profit = profit_cents // 100
                     comm = sell_commission // 100
-                    print(f"日期 {today} 卖出 {code} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{sell_reason} 盈亏 {profit}({profit_rate:.2%}), 手续费{comm}, 剩余资金 {free_amount:.2f}")
+                    code_display = self.data.get_stock_display(code) if self.data else str(code)
+                    print(f"日期 {today} 卖出 {code_display} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{log_reason} 盈亏 {profit}({profit_rate:.2%}), 手续费{comm}, 剩余资金 {free_amount:.2f}")
                 
 
-    def _check_sell(self, hold: HoldStock, stock_data_dict: dict) -> tuple[bool, int, str]:
+    def _check_sell(self, hold: HoldStock, stock_data_dict: dict) -> tuple[bool, int, str, str]:
         """
         统一卖出策略：止损 + 贪婪止盈
         使用Numba加速核心计算
+        返回: (need_sell, sell_price, log_reason, stat_reason)
+        stat_reason: 止损/到期盈利/到期亏损/回落止盈/空字符串
         """
         is_debug = self.debug
 
@@ -545,9 +570,22 @@ class Strategy:
         )
 
         if not need_sell:
-            return False, 0, EMPTY_STRING
+            return False, 0, EMPTY_STRING, EMPTY_STRING
 
-        # 生成原因字符串（仅在debug模式）
+        # 判断卖出原因类型
+        stat_reason = EMPTY_STRING
+        if sell_price == stop_loss_price:
+            stat_reason = '止损'
+        elif hold_days >= self._hold_days_limit:
+            # 到期时判断盈亏
+            if close_price >= buy_price:
+                stat_reason = '到期盈利'
+            else:
+                stat_reason = '到期亏损'
+        else:
+            stat_reason = '回落止盈'
+
+        # 生成详细原因字符串（仅在debug模式）
         if is_debug:
             buy_price_yuan = buy_price / 100
             if sell_price == stop_loss_price:
@@ -568,9 +606,9 @@ class Strategy:
                     reason = f"止盈|开盘回落|回撤率{trailing_rate_pct:.0f}%|最高{highest_yuan:.2f}|止盈价{trailing_yuan:.2f}|开{open_price/100:.2f}"
                 else:
                     reason = f"止盈|盘中回落|回撤率{trailing_rate_pct:.0f}%|最高{highest_yuan:.2f}|止盈价{trailing_yuan:.2f}|低{low_price/100:.2f}|高{high_yuan:.2f}"
-            return True, sell_price, reason
+            return True, sell_price, reason, stat_reason
 
-        return True, sell_price, EMPTY_STRING
+        return True, sell_price, EMPTY_STRING, stat_reason
 
     def settle_amount(self) -> None:
         """计算每日总资产并记录"""
@@ -578,6 +616,9 @@ class Strategy:
         today = self.today
         hold = self.hold
         is_debug = self.debug
+
+        # 记录当日持仓明细
+        daily_holdings = []
 
         for hold_stock in hold:
             code = hold_stock.code
@@ -596,25 +637,46 @@ class Strategy:
             if high_price > hold_stock.highest_price:
                 hold_stock.update_highest_price(high_price)
 
+            # 计算持仓盈亏
+            profit_cents = (close_price - buy_price) * buy_count
+            profit_rate = (close_price - buy_price) / buy_price if buy_price > 0 else 0
+            hold_days = self.calendar.gap(hold_stock.buy_day, today) if self.calendar else 0
+            market_value = close_price * buy_count
+
+            daily_holdings.append({
+                'code': code,
+                'buy_price': buy_price,
+                'close_price': close_price,
+                'buy_count': buy_count,
+                'market_value': market_value,
+                'profit': profit_cents,
+                'profit_rate': profit_rate,
+                'hold_days': hold_days,
+                'highest_price': hold_stock.highest_price
+            })
+
             if is_debug:
-                profit_cents = (close_price - buy_price) * buy_count
-                profit_rate = (close_price - buy_price) / buy_price
                 highest_price = hold_stock.highest_price
-                hold_days = self.calendar.gap(hold_stock.buy_day, today) if self.calendar else 0
                 # 计算关键价格用于验证止盈逻辑
                 target_price = int(buy_price * (1 + self._target_return))
                 stop_loss_price = int(buy_price * (1 + self._stop_loss_rate))
                 trailing_stop_price = int(highest_price * (1 - self._trailing_rate)) if highest_price > 0 else 0
-                print(f"日期 {today} 持有 {code} 日期:{hold_stock.buy_day}->{today} 持仓{hold_days}天 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计:{profit_cents/100:.2f}({profit_rate:.2%}) 目标价{target_price/100:.2f} 止损价{stop_loss_price/100:.2f} 止盈价{trailing_stop_price/100:.2f}")
+                code_display = self.data.get_stock_display(code) if self.data else str(code)
+                print(f"日期 {today} 持有 {code_display} 日期:{hold_stock.buy_day}->{today} 持仓{hold_days}天 价格{buy_price/100:.2f}->{close_price/100:.2f} 最高:{highest_price/100:.2f} 累计:{profit_cents/100:.2f}({profit_rate:.2%}) 目标价{target_price/100:.2f} 止损价{stop_loss_price/100:.2f} 止盈价{trailing_stop_price/100:.2f}")
 
-            hold_amount += close_price * buy_count
-        
+            hold_amount += market_value
+
         free_amount = self.free_amount
         total_value = hold_amount + free_amount
-        
-        # 记录每日资产
-        self.daily_values.append({'date': today, 'value': total_value, 'free_amount': free_amount})
-        
+
+        # 记录每日资产和持仓明细
+        self.daily_values.append({
+            'date': today,
+            'value': total_value,
+            'free_amount': free_amount,
+            'holdings': daily_holdings
+        })
+
         if is_debug:
             free_amount_元 = free_amount / 100
             hold_amount_元 = hold_amount / 100
@@ -648,7 +710,8 @@ class Strategy:
                 最大资金=init_amount,
                 最小资金=init_amount,
                 夏普比率=0,
-                平均资金使用率=0
+                平均资金使用率=0,
+                卖出统计={'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0}
             )
         
         # 结算时强制卖出所有持仓，使用最后一天的收盘价
@@ -735,6 +798,14 @@ class Strategy:
                     import math
                     sharpe_ratio = (avg_daily_return - risk_free_rate) / std_daily_return * math.sqrt(252)
         
+        # 获取卖出统计
+        sell_stats = getattr(self, 'sell_stats', {
+            '止损': 0,
+            '到期盈利': 0,
+            '到期亏损': 0,
+            '回落止盈': 0
+        })
+
         return BacktestResult(
             起始日期=start_date,
             结束日期=end_date,
@@ -747,6 +818,6 @@ class Strategy:
             最大资金=max_value,
             最小资金=min_value,
             夏普比率=sharpe_ratio,
-            平均资金使用率=avg_utilization
+            平均资金使用率=avg_utilization,
+            卖出统计=sell_stats
         )
-    

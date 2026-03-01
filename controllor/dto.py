@@ -69,7 +69,8 @@ BacktestResult=NamedTuple("BacktestResult", [
     ("最大资金", float),
     ("最小资金", float),
     ("夏普比率", float),
-    ("平均资金使用率", float)
+    ("平均资金使用率", float),
+    ("卖出统计", dict)  # 卖出原因统计：止损、到期盈利、到期亏损、回落止盈
 ])
 
 StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [
