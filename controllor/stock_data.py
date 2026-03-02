@@ -98,18 +98,19 @@ class StockData:
         self.date_numpy_dict = {}
         grouped = stock_data_df.group_by("date")
 
-        # 打印前10个交易日的股票数量统计
-        print("\n📊 前10个交易日股票数量统计:")
+        # 打印20250701这天的股票数量
+        print("\n📊 20250701股票数量统计:")
         print("-" * 40)
+        target_date = 20250701
+        group = stock_data_df.filter(pl.col("date") == target_date)
+        count = len(group)
+        print(f"  {target_date}: {count:4d} 只股票")
+        print("-" * 40)
+        
+        # 打印数据范围信息
         all_dates = sorted([d[0] if isinstance(d, tuple) else d for d, _ in grouped])
-        for trade_date in all_dates[:10]:
-            group = stock_data_df.filter(pl.col("date") == trade_date)
-            count = len(group)
-            print(f"  {trade_date}: {count:4d} 只股票")
-        print("-" * 40)
         print(f"  数据范围: {all_dates[0]} 至 {all_dates[-1]}")
-        print(f"  总交易日: {len(all_dates)} 天")
-        print(f"  数据滚动窗口: 约 {len(all_dates)} 个交易日\n")
+        print(f"  总交易日: {len(all_dates)} 天\n")
 
         for trade_date, group in grouped:
             if isinstance(trade_date, tuple):
@@ -335,7 +336,7 @@ class StockData:
 if __name__ == "__main__":
     sd=StockData()
     print("测试按日期获取数据")
-    print(sd.get_numpy_data_by_date(20250707))
+    # print(sd.get_numpy_data_by_date(20250707))
     print("测试按日期和代码获取数据")
     print(sd.get_data_by_date_code(20250102,721))
 
