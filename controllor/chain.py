@@ -370,7 +370,7 @@ class Chain:
             year_result = None
             if self.run_year:
                 try:
-                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+                    year_result = self.execute_one_strategy(strategy, 20250101, 20260301, stock_data, calendar)
                 except Exception as e:
                     print(f"年周期执行失败: {e}")
 
