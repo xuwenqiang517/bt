@@ -6,6 +6,7 @@ import numpy as np
 from numba import njit
 
 from dto import *
+from dto import ResultSchema
 
 # 导入日志配置
 import logger_config
@@ -691,76 +692,43 @@ class Strategy:
     
     def calculate_performance(self, start_date: int, end_date: int) -> BacktestResult:
         """计算并返回策略性能指标"""
-        # 缓存实例变量
         init_amount = self.init_amount
         trades_history = self.trades_history
         hold = self.hold
         daily_values = self.daily_values
-        
+
         if not trades_history and not hold:
-            return BacktestResult(
-                起始日期=start_date,
-                结束日期=end_date,
-                初始资金=init_amount,
-                最终资金=init_amount,
-                总收益=0,
-                总收益率=0,
-                胜率=0,
-                交易次数=0,
-                最大资金=init_amount,
-                最小资金=init_amount,
-                夏普比率=0,
-                平均资金使用率=0,
-                卖出统计={'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0}
-            )
-        
+            empty_result = ResultSchema.create_empty_backtest_result(start_date, end_date, init_amount)
+            return BacktestResult(**empty_result)
+
         # 结算时强制卖出所有持仓，使用最后一天的收盘价
         final_holdings_value = 0
         if hold:
-            # 使用最后一天的日期获取数据
             last_date = self.today
             for hold_stock in hold:
                 code = hold_stock.code
-                # 从数据源获取最后一天的收盘价
                 stock_data_dict = self.data.get_data_by_date_code(last_date, code)
                 if stock_data_dict is None:
-                    # 如果没有数据，使用买入价格作为估值
                     final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
                 else:
-                    # 使用收盘价估值
                     close_price = stock_data_dict['close']
                     final_holdings_value += close_price * hold_stock.buy_count
-        
-        # 最终总价值（分）
+
         free_amount = self.free_amount
         final_total_value = final_holdings_value + free_amount
-        
-        # 总收益 = 最终总价值 - 初始资本
         total_return = final_total_value - init_amount
         total_return_pct = total_return / init_amount if init_amount > 0 else 0
 
         # 计算胜率
         trade_count = len(trades_history)
-        win_rate = 0
-        if trade_count > 0:
-            winning_trades = sum(1 for t in trades_history if t['profit'] > 0)
-            win_rate = winning_trades / trade_count
+        win_rate = sum(1 for t in trades_history if t['profit'] > 0) / trade_count if trade_count > 0 else 0
 
-        # 计算资金使用率（每日持仓市值 / 总资产），限制在0-100%之间
+        # 计算资金使用率
         avg_utilization = 0
         if daily_values:
-            utilization_sum = 0
-            count = 0
-            for dv in daily_values:
-                value = dv['value']
-                if value > 0:
-                    # 持仓市值 = 总资产 - 可用资金，但可用资金可能为负（透支）
-                    hold_value = max(0, value - dv['free_amount'])
-                    utilization = min(hold_value / value, 1.0)  # 限制最大100%
-                    utilization_sum += utilization
-                    count += 1
-            if count > 0:
-                avg_utilization = utilization_sum / count
+            utilizations = [min(max(0, dv['value'] - dv['free_amount']) / dv['value'], 1.0)
+                           for dv in daily_values if dv['value'] > 0]
+            avg_utilization = sum(utilizations) / len(utilizations) if utilizations else 0
 
         # 计算最大资金和最小资金
         if daily_values:
@@ -768,47 +736,25 @@ class Strategy:
             max_value = max(values)
             min_value = min(values)
         else:
-            max_value = init_amount
-            min_value = init_amount
-        
+            max_value = min_value = init_amount
+
         # 计算夏普比率
         sharpe_ratio = 0
         if len(daily_values) > 1:
-            # 计算每日收益率
-            daily_returns = []
-            for i in range(1, len(daily_values)):
-                prev_value = daily_values[i-1]['value']
-                curr_value = daily_values[i]['value']
-                if prev_value > 0:
-                    return_rate = (curr_value - prev_value) / prev_value
-                    daily_returns.append(return_rate)
-            
+            daily_returns = [(daily_values[i]['value'] - daily_values[i-1]['value']) / daily_values[i-1]['value']
+                            for i in range(1, len(daily_values)) if daily_values[i-1]['value'] > 0]
             if daily_returns:
-                # 假设无风险利率为0
-                risk_free_rate = 0
-                # 计算平均每日收益率
-                n_returns = len(daily_returns)
-                avg_daily_return = sum(daily_returns) / n_returns
-                # 计算标准差
-                variance = sum((r - avg_daily_return) ** 2 for r in daily_returns) / n_returns
-                std_daily_return = variance ** 0.5
-                
-                if std_daily_return > 0:
-                    # 年化夏普比率（假设一年252个交易日）
+                avg_return = sum(daily_returns) / len(daily_returns)
+                std = (sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5
+                if std > 0:
                     import math
-                    sharpe_ratio = (avg_daily_return - risk_free_rate) / std_daily_return * math.sqrt(252)
-        
-        # 获取卖出统计
-        sell_stats = getattr(self, 'sell_stats', {
-            '止损': 0,
-            '到期盈利': 0,
-            '到期亏损': 0,
-            '回落止盈': 0
-        })
+                    sharpe_ratio = avg_return / std * math.sqrt(252)
 
-        return BacktestResult(
-            起始日期=start_date,
-            结束日期=end_date,
+        sell_stats = getattr(self, 'sell_stats', {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0})
+
+        result_dict = ResultSchema.create_backtest_result(
+            起始日期=str(start_date),
+            结束日期=str(end_date),
             初始资金=init_amount,
             最终资金=final_total_value,
             总收益=total_return,
@@ -821,3 +767,4 @@ class Strategy:
             平均资金使用率=avg_utilization,
             卖出统计=sell_stats
         )
+        return BacktestResult(**result_dict)

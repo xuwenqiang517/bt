@@ -10,6 +10,7 @@ from tqdm import tqdm
 from local_cache import LocalCache
 
 from dto import *
+from dto import ResultSchema
 from strategy import Strategy
 
 # 导入日志配置
@@ -489,28 +490,8 @@ class Chain:
         return self._sort_data(merged)
 
     def _create_empty_a_df(self) -> pl.DataFrame:
-        """创建空的a文件DataFrame - 包含所有列确保类型一致"""
-        return pl.DataFrame({
-            '周期胜率': pl.Series([], dtype=pl.String),
-            '平均胜率': pl.Series([], dtype=pl.String),
-            '平均收益率': pl.Series([], dtype=pl.String),
-            '平均交易次数': pl.Series([], dtype=pl.Float64),
-            '最大资金': pl.Series([], dtype=pl.Float64),
-            '最小资金': pl.Series([], dtype=pl.Float64),
-            '夏普比率': pl.Series([], dtype=pl.Float64),
-            '平均资金使用率': pl.Series([], dtype=pl.String),
-            '年周期收益率': pl.Series([], dtype=pl.String),
-            '年周期胜率': pl.Series([], dtype=pl.String),
-            '年周期夏普': pl.Series([], dtype=pl.Float64),
-            '年最大资金': pl.Series([], dtype=pl.Float64),
-            '年最小资金': pl.Series([], dtype=pl.Float64),
-            '年交易次数': pl.Series([], dtype=pl.Float64),
-            '止损次数': pl.Series([], dtype=pl.Float64),
-            '到期盈利': pl.Series([], dtype=pl.Float64),
-            '到期亏损': pl.Series([], dtype=pl.Float64),
-            '回落止盈': pl.Series([], dtype=pl.Float64),
-            '配置': pl.Series([], dtype=pl.String)
-        })
+        """创建空的a文件DataFrame - 使用ResultSchema集中定义"""
+        return ResultSchema.create_empty_dataframe()
     
     def _load_cache(self, cache: LocalCache, filename: str) -> pl.DataFrame:
         """加载缓存，如果不存在则创建空的DataFrame"""
@@ -523,28 +504,8 @@ class Chain:
             cache.set_csv_pl(filename, df)
     
     def _ensure_columns(self, df: pl.DataFrame) -> pl.DataFrame:
-        """确保DataFrame包含所有必需的列，兼容旧缓存文件"""
-        required_cols = {
-            '平均交易次数': pl.Float64,
-            '平均资金使用率': pl.String,
-            '年周期收益率': pl.String,
-            '年周期胜率': pl.String,
-            '年周期夏普': pl.Float64,
-            '年最大资金': pl.Float64,
-            '年最小资金': pl.Float64,
-            '年交易次数': pl.Float64,
-            '止损次数': pl.Float64,
-            '到期盈利': pl.Float64,
-            '到期亏损': pl.Float64,
-            '回落止盈': pl.Float64
-        }
-        for col, dtype in required_cols.items():
-            if col not in df.columns:
-                if dtype == pl.String:
-                    df = df.with_columns(pl.lit("").alias(col))
-                else:
-                    df = df.with_columns(pl.lit(0.0).alias(col))
-        return df
+        """确保DataFrame包含所有必需的列 - 使用ResultSchema集中定义"""
+        return ResultSchema.ensure_columns(df)
 
     def _merge_and_sort_data(self, target_df: pl.DataFrame, new_df: pl.DataFrame) -> pl.DataFrame:
         """合并数据并排序"""
@@ -572,82 +533,10 @@ class Chain:
         return df
     
     def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str, year_result: object = None) -> dict:
-        """创建新的行数据"""
-        if not results:
-            # 当results为空时，返回默认值
-            return {
-                "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
-                "平均胜率": "0%",
-                "平均收益率": "0.00%",
-                "平均交易次数": 0.0,
-                "最大资金": 0.0,
-                "最小资金": 0.0,
-                "夏普比率": 0.0,
-                "平均资金使用率": "0.00%",
-                "年周期收益率": "0.00%",
-                "年周期胜率": "0%",
-                "年周期夏普": 0.0,
-                "年最大资金": 0.0,
-                "年最小资金": 0.0,
-                "年交易次数": 0.0,
-                "止损次数": 0.0,
-                "到期盈利": 0.0,
-                "到期亏损": 0.0,
-                "回落止盈": 0.0,
-                "配置": cache_key
-            }
-
-        # 当results不为空时，计算各项指标
-        base_result = {
-            "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
-            "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
-            "平均收益率": f"{float(np.mean([x.总收益率 for x in results])) * 100:.2f}%",
-            "平均交易次数": round(float(np.mean([x.交易次数 for x in results])), 1),
-            "最大资金": float(max([x.最大资金 for x in results])),
-            "最小资金": float(min([x.最小资金 for x in results])),
-            "夏普比率": round(float(np.mean([x.夏普比率 for x in results])), 2),
-            "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
-            "配置": cache_key
-        }
-
-        # 年周期统计（如果有的话）
-        if year_result:
-            base_result.update({
-                "年周期收益率": f"{float(year_result.总收益率) * 100:.2f}%",
-                "年周期胜率": f"{int(year_result.胜率 * 100)}%",
-                "年周期夏普": round(float(year_result.夏普比率), 2),
-                "年最大资金": float(year_result.最大资金),
-                "年最小资金": float(year_result.最小资金),
-                "年交易次数": float(year_result.交易次数)
-            })
-        else:
-            base_result.update({
-                "年周期收益率": "0.00%",
-                "年周期胜率": "0%",
-                "年周期夏普": 0.0,
-                "年最大资金": 0.0,
-                "年最小资金": 0.0,
-                "年交易次数": 0.0
-            })
-
-        # 卖出原因统计（只在年周期回测时有）
-        if year_result and hasattr(year_result, '卖出统计'):
-            sell_stats = year_result.卖出统计
-            base_result.update({
-                "止损次数": float(sell_stats.get('止损', 0)),
-                "到期盈利": float(sell_stats.get('到期盈利', 0)),
-                "到期亏损": float(sell_stats.get('到期亏损', 0)),
-                "回落止盈": float(sell_stats.get('回落止盈', 0))
-            })
-        else:
-            base_result.update({
-                "止损次数": 0.0,
-                "到期盈利": 0.0,
-                "到期亏损": 0.0,
-                "回落止盈": 0.0
-            })
-
-        return base_result
+        """创建新的行数据 - 使用ResultSchema集中定义"""
+        return ResultSchema.create_chain_row_from_results(
+            actual_win_rate, successful_count, total_periods, results, cache_key, year_result
+        )
     
     def _merge_thread_caches(self) -> None:
         """合并所有进程的缓存文件"""
