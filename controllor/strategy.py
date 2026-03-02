@@ -244,12 +244,14 @@ class Strategy:
             '到期亏损': 0,
             '回落止盈': 0
         }
-    
+        # 选股信号记录 (用于统计选股策略效果)
+        self.pick_signals: list[dict] = []
+
     def _add_hold(self, hold_stock: HoldStock) -> None:
         """添加持仓股票"""
         self.hold.append(hold_stock)
         self.hold_codes.add(hold_stock.code)
-    
+
     def _remove_hold(self, code: int) -> HoldStock | None:
         """移除持仓股票"""
         for i, hold in enumerate(self.hold):
@@ -361,6 +363,15 @@ class Strategy:
             if len(codes_list) > 5:
                 codes_str += f",...({len(codes_list)-5} more)"
             print(f"日期 {today} 选出股票 {len(codes_list)} 只: {codes_str}")
+
+        # 记录选股信号（用于后续统计）
+        if self.picked_numpy_data is not None and len(self.picked_numpy_data['code']) > 0:
+            for i in range(len(self.picked_numpy_data['code'])):
+                self.pick_signals.append({
+                    'date': today,
+                    'code': int(self.picked_numpy_data['code'][i]),
+                    'next_open': int(self.picked_numpy_data['next_open'][i])
+                })
     
 
     def buy(self) -> None:
@@ -688,8 +699,7 @@ class Strategy:
     def update_today(self, today: int) -> None:
         """更新当前日期"""
         self.today = today
-        self._today_data_cache = {}
-    
+
     def calculate_performance(self, start_date: int, end_date: int) -> BacktestResult:
         """计算并返回策略性能指标"""
         init_amount = self.init_amount

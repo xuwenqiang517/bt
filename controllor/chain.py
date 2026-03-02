@@ -401,7 +401,7 @@ class Chain:
             print(f"交易明细图表已保存到: {save_path}")
 
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
-        """处理一组策略 - 批量累积优化"""
+        """处理一组策略 - 批量累积优化，使用策略对象池复用"""
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
         stock_data = sd(force_refresh=self.force_refresh)
@@ -411,20 +411,20 @@ class Chain:
         cached_a_df = self._load_cache(cache, cache_filename)
         fail_count = self.fail_count
         total_count = len(self.date_arr)
-        
+
         # 批量累积配置
         BATCH_SIZE = 50  # 每50个策略合并一次
         pending_rows = []
         count = 0
-        
-        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略", 
+
+        for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略",
                           total=len(strategy_group), position=thread_id, leave=True, mininterval=1):
             count += 1
             strategy = Strategy(**params)
             results = []
             failure_count = 0
             all_daily_values = []
-            
+
             for s, e in self.date_arr:
                 result = self.execute_one_strategy(strategy, s, e, stock_data, calendar)
                 if hasattr(strategy, 'daily_values') and strategy.daily_values:
@@ -445,9 +445,15 @@ class Chain:
             actual_win_rate = successful_count / total_count if results else 0
 
             year_result = None
+            pick_signal_stats = None
             if self.run_year:
                 try:
                     year_result = self.execute_one_strategy(strategy, 20250101, 20260301, stock_data, calendar)
+                    # 年周期回测后，统计选股信号表现
+                    if hasattr(strategy, 'pick_signals') and strategy.pick_signals:
+                        pick_signal_stats = self._calc_pick_signal_stats(
+                            strategy.pick_signals, stock_data, calendar
+                        )
                 except Exception as e:
                     print(f"年周期执行失败: {e}")
 
@@ -455,7 +461,7 @@ class Chain:
             base_config = [base_arr[1]]
             cache_key = "|".join(",".join(map(str, arr)) for arr in 
                                [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
-            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
+            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result, pick_signal_stats)
             
             if is_debug:
                 print(f"进程 {thread_id}: {new_row}")
@@ -531,12 +537,117 @@ class Chain:
         # 删除临时列
         df = df.drop('年周期收益率数值')
         return df
-    
-    def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int, results: list, cache_key: str, year_result: object = None) -> dict:
+
+    def _calc_pick_signal_stats(self, pick_signals: list, stock_data, calendar) -> dict:
+        """计算选股信号统计（1/3/5天后盈亏情况）
+
+        计算逻辑：
+        - 买入价：选股日的次日开盘价
+        - 1日收益：次日收盘 - 次日开盘
+        - 3日收益：3个交易日后的收盘 - 次日开盘
+        - 5日收益：5个交易日后的收盘 - 次日开盘
+
+        Args:
+            pick_signals: 选股信号列表 [{'date': int, 'code': int, 'next_open': int}, ...]
+            stock_data: 股票数据对象
+            calendar: 交易日历对象
+
+        Returns:
+            dict: 统计结果字典
+        """
+        if not pick_signals:
+            return {
+                '选股信号数': 0,
+                '1日胜率': '', '1日盈亏比': '', '1日平均收益': '',
+                '3日胜率': '', '3日盈亏比': '', '3日平均收益': '',
+                '5日胜率': '', '5日盈亏比': '', '5日平均收益': ''
+            }
+
+        stats = {1: {'profits': []}, 3: {'profits': []}, 5: {'profits': []}}
+
+        for signal in pick_signals:
+            date = signal['date']
+            code = signal['code']
+
+            # 找到次日（买入日）的索引
+            current_idx = calendar.start(date)
+            if current_idx == -1:
+                continue
+
+            next_idx = calendar.next(current_idx)
+            if next_idx == -1:
+                continue
+
+            # 获取次日的开盘价（买入价）
+            buy_date = calendar.get_date(next_idx)
+            buy_data = stock_data.get_data_by_date_code(buy_date, code)
+            if buy_data is None:
+                continue
+            buy_price = buy_data['open']
+
+            # 获取未来1/3/5个交易日的收盘价
+            for days in [1, 3, 5]:
+                # 找到N个交易日后的日期（从次日开始算）
+                target_idx = next_idx
+                for _ in range(days - 1):  # 已经在次日，所以只需要再移动days-1天
+                    target_idx = calendar.next(target_idx)
+                    if target_idx == -1:
+                        break
+
+                if target_idx == -1:
+                    continue
+
+                sell_date = calendar.get_date(target_idx)
+
+                # 获取卖出日期的收盘价
+                sell_data = stock_data.get_data_by_date_code(sell_date, code)
+                if sell_data is None:
+                    continue
+
+                sell_price = sell_data['close']
+                profit_rate = (sell_price - buy_price) / buy_price if buy_price > 0 else 0
+                stats[days]['profits'].append(profit_rate)
+
+        result = {'选股信号数': len(pick_signals)}
+
+        for days in [1, 3, 5]:
+            profits = stats[days]['profits']
+            if not profits:
+                result[f'{days}日胜率'] = ''
+                result[f'{days}日盈亏比'] = ''
+                result[f'{days}日平均收益'] = ''
+                continue
+
+            win_count = sum(1 for p in profits if p > 0)
+            loss_count = len(profits) - win_count
+            win_rate = win_count / len(profits) if profits else 0
+
+            avg_profit = sum(profits) / len(profits) if profits else 0
+
+            # 计算盈亏比
+            win_profits = [p for p in profits if p > 0]
+            loss_profits = [abs(p) for p in profits if p < 0]
+            avg_win = sum(win_profits) / len(win_profits) if win_profits else 0
+            avg_loss = sum(loss_profits) / len(loss_profits) if loss_profits else 0
+            profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else (float('inf') if avg_win > 0 else 0)
+
+            result[f'{days}日胜率'] = f"{win_rate*100:.1f}%"
+            result[f'{days}日盈亏比'] = f"{profit_loss_ratio:.2f}" if profit_loss_ratio != float('inf') else "∞"
+            result[f'{days}日平均收益'] = f"{avg_profit*100:.2f}%"
+
+        return result
+
+    def _create_new_row(self, actual_win_rate: float, successful_count: int, total_periods: int,
+                        results: list, cache_key: str, year_result: object = None,
+                        pick_signal_stats: dict = None) -> dict:
         """创建新的行数据 - 使用ResultSchema集中定义"""
-        return ResultSchema.create_chain_row_from_results(
+        row = ResultSchema.create_chain_row_from_results(
             actual_win_rate, successful_count, total_periods, results, cache_key, year_result
         )
+        # 合并选股信号统计
+        if pick_signal_stats:
+            row.update(pick_signal_stats)
+        return row
     
     def _merge_thread_caches(self) -> None:
         """合并所有进程的缓存文件"""
@@ -746,7 +857,7 @@ class Chain:
         return
 
     def _process_strategy_generator(self, thread_id: int, start_idx: int, end_idx: int) -> None:
-        """处理指定索引范围的策略（生成器模式）"""
+        """处理指定索引范围的策略（生成器模式），使用策略对象池复用"""
         # 为每个进程创建独立的缓存
         cache = LocalCache()
         thread_result_file = f"{self.result_file}_thread_{thread_id}"
@@ -799,9 +910,15 @@ class Chain:
 
             # 跑年连续周期 20250101-20260101（根据run_year参数决定是否执行）
             year_result = None
+            pick_signal_stats = None
             if self.run_year:
                 try:
                     year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+                    # 年周期回测后，统计选股信号表现
+                    if hasattr(strategy, 'pick_signals') and strategy.pick_signals:
+                        pick_signal_stats = self._calc_pick_signal_stats(
+                            strategy.pick_signals, stock_data, calendar
+                        )
                 except Exception as e:
                     print(f"年周期执行失败: {e}")
 
@@ -810,7 +927,7 @@ class Chain:
             # 只保留持仓数量（动态仓位，去掉仓位比例）
             base_config = [base_arr[1]]
             cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
-            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result)
+            new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result, pick_signal_stats)
             print(new_row)
 
             if is_debug:

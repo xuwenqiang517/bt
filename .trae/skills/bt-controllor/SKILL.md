@@ -84,3 +84,37 @@ description: "Provides project context and coding standards for the bt controllo
 
 - **无断点续跑**: 缓存都是运行时缓存，进程中断后无法恢复
 - **多进程缓存独立**: 每个进程维护自己的PickCache实例
+
+## 测试规范
+
+### 需要测试的场景（大改动/新功能）
+
+对于以下类型的修改，必须使用专用参数进行测试：
+
+**测试参数**:
+```python
+param = {
+    "strategy": [{
+        "base_param_arr": [10000000, 1],
+        "buy_param_arr": [2, -1, 7, -1, 14, -1, 3],
+        "pick_param_arr": [0],
+        "sell_param_arr": [-10, 5, 12, 6],
+        "debug": True
+    }],
+    "date_arr": [(20250101, 20250201)],
+    "chain_debug": True,
+    "run_year": True,
+    "processor_count": 1
+}
+```
+
+**必须验证的字段**:
+- 选股信号数 > 0
+- 1日/3日/5日胜率、盈亏比、平均收益有值且格式正确
+
+### 不需要测试的场景（简单改动）
+
+- 注释修改
+- 日志输出调整
+- 变量重命名（无逻辑变化）
+- 代码格式化
