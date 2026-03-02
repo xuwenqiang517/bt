@@ -133,29 +133,61 @@ class StockCalendar:
                     return date_val
         return today_int
 
-    def get_date_arr(self)->list:
-        return [
-            [20240701,20240801]
-            ,[20240801,20240901]
-            ,[20240901,20241001]
-            ,[20241001,20241101]
-            ,[20241101,20241201]
-            ,[20241201,20250101]
-            ,[20250101,20250201]
-            ,[20250201,20250301]
-            ,[20250301,20250401]
-            ,[20250401,20250501]
-            ,[20250501,20250601]
-            ,[20250601,20250701]
-            ,[20250701,20250801]
-            ,[20250801,20250901]
-            ,[20250901,20251001]
-            ,[20251001,20251101]
-            ,[20251101,20251201]
-            ,[20251201,20260101]
-            ,[20260101,20260201]
-            ,[20260201,20260301]
-        ]
+    def get_date_arr(self, period_days: int = 20) -> list:
+        """生成固定交易天数的周期数组
+
+        Args:
+            period_days: 每个周期的交易天数，默认20天
+
+        Returns:
+            list: [[start_date, end_date], ...]
+        """
+        start_date = 20240701
+        end_date = 20260301
+
+        # 找到起始和结束索引
+        start_idx = self.start(start_date)
+        end_idx = self.start(end_date)
+
+        if start_idx == -1 or end_idx == -1:
+            print(f"警告: 无法找到日期范围 {start_date} - {end_date}")
+            return []
+
+        result = []
+        current_idx = start_idx
+
+        while current_idx <= end_idx:
+            # 计算当前周期的结束索引
+            period_end_idx = current_idx + period_days - 1
+
+            # 如果超出范围，停止
+            if period_end_idx > end_idx:
+                break
+
+            start = self.get_date(current_idx)
+            end = self.get_date(period_end_idx)
+            result.append([start, end])
+
+            # 移动到下一个周期（不重叠）
+            current_idx = period_end_idx + 1
+
+        # 打印周期信息
+        print(f"\n周期划分结果 (每{period_days}个交易日):")
+        print(f"总周期数: {len(result)}")
+        print(f"日期范围: {start_date} - {end_date}")
+        if result:
+            print(f"第一个周期: {result[0][0]} - {result[0][1]}")
+            print(f"最后一个周期: {result[-1][0]} - {result[-1][1]}")
+            # 计算丢弃的日期
+            last_end_idx = self.start(result[-1][1])
+            discarded = end_idx - last_end_idx
+            if discarded > 0:
+                discarded_start = self.get_date(last_end_idx + 1)
+                discarded_end = self.get_date(end_idx)
+                print(f"丢弃的日期: {discarded}个交易日 ({discarded_start} - {discarded_end})")
+        print()
+
+        return result
 
 
 if __name__ == "__main__":

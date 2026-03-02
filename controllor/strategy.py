@@ -285,6 +285,18 @@ class Strategy:
             if self.debug:
                 count = len(self.picked_numpy_data['code']) if self.picked_numpy_data else 0
                 print(f"日期 {today} 选出股票 {count} 只 (排序缓存)")
+            # 记录选股信号（用于后续统计）- 缓存命中时也需要记录，限制每天最多记录max_hold_count只
+            if self.picked_numpy_data is not None and len(self.picked_numpy_data['code']) > 0:
+                signal_count = min(len(self.picked_numpy_data['code']), self.max_hold_count)
+                for i in range(signal_count):
+                    next_open_val = self.picked_numpy_data['next_open'][i]
+                    if next_open_val != next_open_val:  # NaN 检查
+                        continue
+                    self.pick_signals.append({
+                        'date': today,
+                        'code': int(self.picked_numpy_data['code'][i]),
+                        'next_open': int(next_open_val)
+                    })
             return
 
         # 检查筛选缓存（第一级缓存）
@@ -364,13 +376,18 @@ class Strategy:
                 codes_str += f",...({len(codes_list)-5} more)"
             print(f"日期 {today} 选出股票 {len(codes_list)} 只: {codes_str}")
 
-        # 记录选股信号（用于后续统计）
+        # 记录选股信号（用于后续统计）- 限制每天最多记录max_hold_count只（排序后的前N只）
         if self.picked_numpy_data is not None and len(self.picked_numpy_data['code']) > 0:
-            for i in range(len(self.picked_numpy_data['code'])):
+            signal_count = min(len(self.picked_numpy_data['code']), self.max_hold_count)
+            for i in range(signal_count):
+                next_open_val = self.picked_numpy_data['next_open'][i]
+                # 跳过 NaN 值
+                if next_open_val != next_open_val:  # NaN 检查
+                    continue
                 self.pick_signals.append({
                     'date': today,
                     'code': int(self.picked_numpy_data['code'][i]),
-                    'next_open': int(self.picked_numpy_data['next_open'][i])
+                    'next_open': int(next_open_val)
                 })
     
 

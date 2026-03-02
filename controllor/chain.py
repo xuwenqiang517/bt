@@ -25,6 +25,7 @@ class Chain:
         self.processor_count = param.get("processor_count", 1)  # 进程数，默认1
         self.fail_count = param.get("fail_count", 1)  # 允许失败次数，默认1
         self.force_refresh = param.get("force_refresh", False)  # 是否强制刷新数据缓存
+        self.sort_periods_by_difficulty = param.get("sort_periods_by_difficulty", True)  # 是否按难度排序周期
 
         self.param = param  # 原始参数
         self.result_file = param.get("result_file", None)  # 结果文件
@@ -35,74 +36,67 @@ class Chain:
         self.param_generator = param.get("param_generator", None)
         self.total_strategy_count = param.get("total_strategy_count", 0)
 
-    def _draw_fund_trend(self, daily_values, title):
-        """绘制资金变化趋势图表并保存到data目录"""
-        if not daily_values:
-            if self.chain_debug:
-                print("没有资金数据，跳过绘图")
-            return
-        
-        from pathlib import Path
-        import os
-        
-        # 计算保存路径（与local_cache.py中的cache_url保持一致）
-        data_dir = Path(__file__).resolve().parent.parent / "./data"
-        os.makedirs(data_dir, exist_ok=True)
-        
-        # 生成唯一的文件名
-        import re
-        # 移除标题中的特殊字符，确保文件名安全
-        safe_title = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fa5]', '_', title)
-        # 截取前50个字符，避免文件名过长
-        safe_title = safe_title[:50]
-        file_name = f"{safe_title}.png"
-        save_path = data_dir / file_name
-        
-        # 提取日期和资金值（将分转换为元）
-        dates = [f"{dv['date']:08d}" for dv in daily_values]
-        values = [dv['value'] / 100 for dv in daily_values]
-        
-        # 调试信息
-        # if self.chain_debug:
-        #     print(f"绘图数据: 日期数量={len(dates)}, 资金数量={len(values)}")
-        #     if dates:
-        #         print(f"起始日期: {dates[0]}, 结束日期: {dates[-1]}")
-        #     if values:
-        #         print(f"起始资金: {values[0]:.2f}, 结束资金: {values[-1]:.2f}")
-        #         print(f"最大资金: {max(values):.2f}, 最小资金: {min(values):.2f}")
-        
-        # 设置中文字体
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'WenQuanYi Micro Hei']  # 用来正常显示中文标签
-        plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-        
-        # 创建图表
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(dates, values, label='总资产', linewidth=2)
-        ax.set_xlabel('日期')
-        ax.set_ylabel('资金')
-        ax.set_title(title)
-        ax.grid(True)
-        ax.legend()
-        
-        # 设置y轴刻度格式为普通数字，不使用科学计数法
-        ax.ticklabel_format(style='plain', axis='y')
-        
-        # 调整日期标签
-        if len(dates) > 10:
-            # 只显示部分日期标签，避免重叠
-            step = len(dates) // 10
-            ax.set_xticks(dates[::step])
-        
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        # plt.show()
-        # 保存图表
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)  # 关闭图表，释放内存
-        
-        if self.chain_debug:
-            print(f"资金变化图表已保存到: {save_path}")
-            print(f"图表保存成功，文件大小: {os.path.getsize(save_path) if os.path.exists(save_path) else 0} bytes")
+        # 如果启用，按难度排序周期（熊市优先）
+        if self.sort_periods_by_difficulty and self.date_arr:
+            self.date_arr = self._sort_periods_by_difficulty()
+            # 更新param，确保子进程使用相同的排序
+            self.param["date_arr"] = self.date_arr
+
+    def _sort_periods_by_difficulty(self) -> list:
+        """按周期难度排序，低收益（熊市）周期优先，实现快速失败优化
+
+        使用指数平均收益作为难度指标，避免预计算所有策略
+        """
+        stock_data = sd(force_refresh=self.force_refresh)
+        calendar = sc()
+
+        period_scores = []
+        for start_date, end_date in self.date_arr:
+            # 使用指数平均涨跌幅作为市场难度指标
+            score = self._calc_period_difficulty(start_date, end_date, stock_data, calendar)
+            period_scores.append((start_date, end_date, score))
+
+        # 按难度排序（低收益/负收益周期优先）
+        period_scores.sort(key=lambda x: x[2])
+
+        sorted_arr = [(s, e) for s, e, _ in period_scores]
+
+        # 打印排序结果
+        print(f"\n周期按难度排序（熊市优先）:")
+        for i, (s, e, score) in enumerate(period_scores[:5]):
+            print(f"  {i+1}. {s}-{e}: 市场收益={score*100:.2f}%")
+        if len(period_scores) > 5:
+            print(f"  ... 共{len(period_scores)}个周期")
+        print()
+
+        return sorted_arr
+
+    def _calc_period_difficulty(self, start_date: int, end_date: int, stock_data, calendar) -> float:
+        """计算周期难度：使用等权平均涨跌幅作为市场基准
+
+        Returns:
+            float: 周期平均收益率，越低表示越难（熊市）
+        """
+        start_idx = calendar.start(start_date)
+        end_idx = calendar.start(end_date)
+
+        if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+            return 0.0
+
+        total_return = 0.0
+        count = 0
+
+        for idx in range(start_idx, end_idx + 1):
+            date = calendar.get_date(idx)
+            day_data = stock_data.get_numpy_data_by_date(date)
+            if day_data is not None and len(day_data['code']) > 0:
+                # 使用当日平均涨跌幅
+                avg_change = np.mean(day_data['change_pct'])
+                total_return += avg_change
+                count += 1
+
+        # 返回平均日收益，负值表示熊市
+        return total_return / count if count > 0 else 0.0
 
     def _draw_trade_details(self, trades_history, daily_values, title, stock_data=None):
         """绘制交易明细图表，在资金曲线上直接标注完整交易信息"""
@@ -400,6 +394,12 @@ class Chain:
         if self.chain_debug:
             print(f"交易明细图表已保存到: {save_path}")
 
+    @staticmethod
+    def _process_strategy_group_worker(strategy_group: List[Dict[str, Any]], thread_id: int, param: dict) -> None:
+        """子进程工作函数（静态方法，可序列化）- 用于非生成器模式的多进程"""
+        chain = Chain(param=param)
+        chain._process_strategy_group(strategy_group, thread_id)
+
     def _process_strategy_group(self, strategy_group: List[Dict[str, Any]], thread_id: int) -> None:
         """处理一组策略 - 批量累积优化，使用策略对象池复用"""
         cache = LocalCache()
@@ -465,7 +465,6 @@ class Chain:
             
             if is_debug:
                 print(f"进程 {thread_id}: {new_row}")
-                self._draw_fund_trend(all_daily_values, f'资金趋势 - {cache_key}')
             
             pending_rows.append(new_row)
             
@@ -525,8 +524,11 @@ class Chain:
         return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """排序DataFrame，按年周期收益率倒排"""
+        """排序DataFrame，按年周期收益率倒排（如果有该列）"""
         if df.is_empty():
+            return df
+        # 只有在有年周期收益率列时才排序
+        if '年周期收益率' not in df.columns:
             return df
         # 将年周期收益率转换为数值类型（处理字符串百分比格式）
         df = df.with_columns(
@@ -538,7 +540,7 @@ class Chain:
         df = df.drop('年周期收益率数值')
         return df
 
-    def _calc_pick_signal_stats(self, pick_signals: list, stock_data, calendar) -> dict:
+    def _calc_pick_signal_stats(self, pick_signals: list, stock_data, calendar) -> dict | None:
         """计算选股信号统计（1/3/5天后盈亏情况）
 
         计算逻辑：
@@ -553,15 +555,10 @@ class Chain:
             calendar: 交易日历对象
 
         Returns:
-            dict: 统计结果字典
+            dict | None: 统计结果字典，如果没有有效数据则返回None
         """
         if not pick_signals:
-            return {
-                '选股信号数': 0,
-                '1日胜率': '', '1日盈亏比': '', '1日平均收益': '',
-                '3日胜率': '', '3日盈亏比': '', '3日平均收益': '',
-                '5日胜率': '', '5日盈亏比': '', '5日平均收益': ''
-            }
+            return None
 
         stats = {1: {'profits': []}, 3: {'profits': []}, 5: {'profits': []}}
 
@@ -607,6 +604,11 @@ class Chain:
                 sell_price = sell_data['close']
                 profit_rate = (sell_price - buy_price) / buy_price if buy_price > 0 else 0
                 stats[days]['profits'].append(profit_rate)
+
+        # 检查是否有有效数据（至少有一天有收益数据）
+        has_valid_data = any(stats[days]['profits'] for days in [1, 3, 5])
+        if not has_valid_data:
+            return None
 
         result = {'选股信号数': len(pick_signals)}
 
@@ -665,7 +667,25 @@ class Chain:
             # 加载进程缓存
             thread_a_df = cache.get_csv_pl(thread_cache_filename)
             if thread_a_df is not None and not thread_a_df.is_empty():
-                # 按主进程的列顺序重新排列（所有进程列结构一致）
+                # 确保列一致：使用主缓存的列，缺失的列按主缓存类型填空值
+                for col in main_a_df.columns:
+                    if col not in thread_a_df.columns:
+                        # 根据主缓存列的类型选择默认值
+                        col_dtype = main_a_df[col].dtype
+                        if col_dtype in (pl.Float64, pl.Float32):
+                            thread_a_df = thread_a_df.with_columns(pl.lit(0.0).alias(col))
+                        elif col_dtype in (pl.Int64, pl.Int32, pl.Int16, pl.Int8):
+                            thread_a_df = thread_a_df.with_columns(pl.lit(0).cast(col_dtype).alias(col))
+                        else:
+                            thread_a_df = thread_a_df.with_columns(pl.lit("").alias(col))
+                # 统一所有数值列为相同类型
+                for col in main_a_df.columns:
+                    if col in thread_a_df.columns:
+                        main_dtype = main_a_df[col].dtype
+                        thread_dtype = thread_a_df[col].dtype
+                        if main_dtype != thread_dtype:
+                            thread_a_df = thread_a_df.with_columns(pl.col(col).cast(main_dtype).alias(col))
+                # 按主进程的列顺序重新排列
                 thread_a_df = thread_a_df.select(main_a_df.columns)
                 main_a_df = pl.concat([main_a_df, thread_a_df], rechunk=True)
                 # 删除已合并的进程缓存文件
@@ -674,12 +694,13 @@ class Chain:
         # 去重并排序
         if not main_a_df.is_empty() and not self.chain_debug:
             main_a_df = main_a_df.unique(subset=['配置'])
-            # 按年周期收益率排序（处理字符串百分比格式）
-            main_a_df = main_a_df.with_columns(
-                pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
-            )
-            main_a_df = main_a_df.sort(by='年周期收益率数值', descending=True)
-            main_a_df = main_a_df.drop('年周期收益率数值')
+            # 按年周期收益率排序（处理字符串百分比格式），只有在有该列时才排序
+            if '年周期收益率' in main_a_df.columns:
+                main_a_df = main_a_df.with_columns(
+                    pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
+                )
+                main_a_df = main_a_df.sort(by='年周期收益率数值', descending=True)
+                main_a_df = main_a_df.drop('年周期收益率数值')
             # 保存到缓存
             self._save_cache(cache, main_cache_filename, main_a_df)
         
@@ -721,16 +742,18 @@ class Chain:
         else:
             # 多进程时，主进程处理第一组，其余由子进程处理
             print(f"多进程模式，主进程处理一组，创建 {self.processor_count - 1} 个子进程")
-            
-            
-            
+
+            # 准备子进程参数（使用已排序的date_arr）
+            worker_param = self.param.copy()
+            worker_param["sort_periods_by_difficulty"] = False  # 子进程不重新排序
+
             # 创建并启动子进程处理剩余组
             for i in range(1, self.processor_count):
                 group = strategy_groups[i]
                 process_name = f"ChainProcess-{i}"
                 process = multiprocessing.Process(
-                    target=self._process_strategy_group,
-                    args=(group, i),
+                    target=self._process_strategy_group_worker,
+                    args=(group, i, worker_param),
                     name=process_name
                 )
                 processes.append(process)
@@ -933,7 +956,6 @@ class Chain:
             if is_debug:
                 if 'new_row' in locals():
                     print(f"进程 {thread_id}: {new_row}")
-                self._draw_fund_trend(all_daily_values, f'进程 {thread_id} - 策略资金变化趋势 - {cache_key}')
 
             # 直接将new_row转换为DataFrame并处理
             new_data_df = pl.DataFrame([new_row])
@@ -956,6 +978,8 @@ class Chain:
 
         # 重新创建生成器和Chain实例
         gen = ParamGenerator()
+        # 子进程不重新排序周期，使用主进程已排序的date_arr
+        param["sort_periods_by_difficulty"] = False
         chain = Chain(param=param)
         chain.param_generator = gen
         chain.result_file = result_file

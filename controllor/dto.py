@@ -28,10 +28,13 @@ class ResultSchema:
         ("周期胜率", str, ""),
         ("平均胜率", str, ""),
         ("平均收益率", str, ""),
-        ("平均交易次数", float, 0.0),
-        ("平均资金使用率", str, ""),
         ("年周期收益率", str, ""),
         ("年周期胜率", str, ""),
+        ("平均交易次数", float, 0.0),
+        ("平均资金使用率", str, ""),
+        ("最大资金", float, 0.0),
+        ("最小资金", float, 0.0),
+        ("夏普比率", float, 0.0),
         ("年周期夏普", float, 0.0),
         ("年最大资金", float, 0.0),
         ("年最小资金", float, 0.0),
@@ -125,10 +128,10 @@ class ResultSchema:
             "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
             "平均收益率": f"{float(np.mean([x.总收益率 for x in results])) * 100:.2f}%",
             "平均交易次数": round(float(np.mean([x.交易次数 for x in results])), 1),
+            "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
             "最大资金": float(max([x.最大资金 for x in results])),
             "最小资金": float(min([x.最小资金 for x in results])),
             "夏普比率": round(float(np.mean([x.夏普比率 for x in results])), 2),
-            "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
             "配置": cache_key
         }
 
