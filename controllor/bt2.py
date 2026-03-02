@@ -96,7 +96,7 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    1|3,-1,7,20,14,25,2|0|-10,9,7,3
+    1|-1,-1,8,15,15,20,2|0|-9,6,6,5
     """
 
     bt_all(processor_count=4, fail_count=0, strategy_params=None, max_strategy_count=1000000000000)

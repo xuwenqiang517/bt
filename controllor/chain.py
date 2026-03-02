@@ -169,7 +169,27 @@ class Chain:
         # 使用数值索引画图，避免字符串日期导致的分类轴问题
         ax1.plot(x_indices, values, label='总资产', linewidth=2, color='navy', alpha=0.8)
 
-        # 标注所有交易（不跳过任何交易）
+        # 收集已卖出的股票代码
+        sold_codes = {trade['code'] for trade in trades_history}
+        
+        # 获取最后一天未卖出的持仓
+        last_day_data = daily_values[-1] if daily_values else None
+        unsold_holdings = []
+        if last_day_data:
+            last_date = last_day_data['date']
+            last_holdings = last_day_data.get('holdings', [])
+            for h in last_holdings:
+                if h['code'] not in sold_codes:
+                    unsold_holdings.append({
+                        'code': h['code'],
+                        'buy_price': h['buy_price'],
+                        'current_price': h['close_price'],
+                        'profit_rate': h['profit_rate'],
+                        'buy_day': h.get('buy_day', last_date),  # 如果没有buy_day，用最后一天
+                        'current_day': last_date
+                    })
+        
+        # 标注所有已完成的交易
         for i, trade in enumerate(trades_history):
             sell_date = trade['date']
             buy_date = trade['buy_date']
@@ -178,9 +198,9 @@ class Chain:
 
             sell_idx = date_to_idx[sell_date]
             buy_idx = date_to_idx[buy_date]
-            x_sell = x_indices[sell_idx]  # 使用数值索引
+            x_sell = x_indices[sell_idx]
             y_sell = values[sell_idx]
-            x_buy = x_indices[buy_idx]    # 使用数值索引
+            x_buy = x_indices[buy_idx]
             y_buy = values[buy_idx]
 
             code = trade['code']
@@ -190,27 +210,24 @@ class Chain:
             profit = trade['profit'] / 100
             reason = trade.get('reason', '')
 
-            # 计算持仓天数
             hold_days = sell_idx - buy_idx
 
-            # 获取股票名称
             if stock_data:
                 stock_name = stock_data.get_stock_name(code)
                 name_short = stock_name[:4] if len(stock_name) > 4 else stock_name
             else:
                 name_short = str(code)[-6:]
 
-            # 简化卖出原因（区分止盈类型）
+            # 简化卖出原因（区分止盈类型和到期盈亏）
             simple_reason = ''
             if '止损' in reason:
                 simple_reason = '止损'
             elif '到期' in reason:
-                if '盈利' in reason:
-                    simple_reason = '到期盈'
+                if '盈利' in reason or profit > 0:
+                    simple_reason = '到期盈利'
                 else:
-                    simple_reason = '到期亏'
+                    simple_reason = '到期亏损'
             elif '止盈' in reason or '回落' in reason:
-                # 区分开盘回落和盘中回落
                 if '开盘回落' in reason:
                     simple_reason = '开盘回落止盈'
                 elif '盘中回落' in reason:
@@ -218,25 +235,16 @@ class Chain:
                 else:
                     simple_reason = '回落止盈'
 
-            # 根据盈亏选择颜色（A股习惯：涨红跌绿）
             trade_color = 'red' if profit > 0 else 'green'
 
-            # 标注买入点（蓝色）和卖出点（黄色统一）
             ax1.scatter([x_buy], [y_buy], color='blue', marker='>', s=100, zorder=5)
             ax1.scatter([x_sell], [y_sell], color='gold', marker='s', s=100, zorder=5)
 
-            # 计算标注位置：上下交替
-            is_top = i % 2 == 0  # 偶数交易在上方，奇数在下方
+            is_top = i % 2 == 0
 
-            # 构建多行标注框内容
             buy_date_str = str(buy_date)[4:]
             sell_date_str = str(sell_date)[4:]
 
-            # 四行格式：
-            # 第一行：股票代码+股票名称
-            # 第二行：买入时间+买入价格
-            # 第三行：卖出时间+卖出价格
-            # 第四行：收益率+持仓天数+卖出原因
             full_label = (
                 f'{code} {name_short}\n'
                 f'买:{buy_date_str} {buy_price:.2f}元\n'
@@ -244,29 +252,22 @@ class Chain:
                 f'{profit_rate:+.1f}% | {hold_days}天 | {simple_reason}'
             )
 
-            # 计算标注框位置（在买入卖出中间上方或下方）
-            mid_x = (x_buy + x_sell) / 2  # 买入卖出日期的中间
-            mid_y = (y_buy + y_sell) / 2  # 买入卖出资金的中间
+            mid_x = (x_buy + x_sell) / 2
+            mid_y = (y_buy + y_sell) / 2
 
-            # 动态计算垂直偏移，避免框重叠
-            # 根据交易密度调整间距
-            trade_span = x_sell - x_buy  # 交易跨度（天数）
-            base_offset = max(60, min(100, trade_span * 8))  # 基础偏移：60-100像素
+            trade_span = x_sell - x_buy
+            base_offset = max(60, min(100, trade_span * 8))
 
             if is_top:
-                # 标注在上方，逐层递增
-                y_offset = base_offset + (i % 3) * 35  # 3层循环
+                y_offset = base_offset + (i % 3) * 35
                 va_align = 'bottom'
             else:
-                # 标注在下方，逐层递增
                 y_offset = -base_offset - (i % 3) * 35
                 va_align = 'top'
 
-            # 标注框的绝对位置
             box_x = mid_x
             box_y = mid_y + y_offset * (max(values) - min(values)) / 800 if len(values) > 1 else mid_y + y_offset
 
-            # 根据上下位置调整弧线方向，避免交叉
             if is_top:
                 rad_buy = 0.15
                 rad_sell = -0.15
@@ -274,19 +275,94 @@ class Chain:
                 rad_buy = -0.15
                 rad_sell = 0.15
 
-            # 先画从标注框到买入点的箭头（蓝色）
             ax1.annotate('', xy=(x_buy, y_buy), xytext=(box_x, box_y),
                         arrowprops=dict(arrowstyle='->', color='blue', lw=1.2, connectionstyle=f'arc3,rad={rad_buy}'))
 
-            # 再画从标注框到卖出点的箭头（黄色统一）
             ax1.annotate('', xy=(x_sell, y_sell), xytext=(box_x, box_y),
                         arrowprops=dict(arrowstyle='->', color='orange', lw=1.2, connectionstyle=f'arc3,rad={rad_sell}'))
 
-            # 最后画标注框
             ax1.text(box_x, box_y, full_label, fontsize=7, color='black',
                     ha='center', va='center',
                     bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.95,
                              edgecolor=trade_color, lw=2))
+        
+        # 标注未卖出的持仓
+        unsold_start_idx = len(trades_history)
+        for j, holding in enumerate(unsold_holdings):
+            i = unsold_start_idx + j
+            code = holding['code']
+            buy_price = holding['buy_price'] / 100
+            current_price = holding['current_price'] / 100
+            profit_rate = holding['profit_rate'] * 100
+            buy_day = holding['buy_day']
+            current_day = holding['current_day']
+            
+            if buy_day not in date_to_idx or current_day not in date_to_idx:
+                continue
+                
+            buy_idx = date_to_idx[buy_day]
+            current_idx = date_to_idx[current_day]
+            x_buy = x_indices[buy_idx]
+            y_buy = values[buy_idx]
+            x_current = x_indices[current_idx]
+            y_current = values[current_idx]
+            
+            hold_days = current_idx - buy_idx
+            
+            if stock_data:
+                stock_name = stock_data.get_stock_name(code)
+                name_short = stock_name[:4] if len(stock_name) > 4 else stock_name
+            else:
+                name_short = str(code)[-6:]
+            
+            trade_color = 'red' if profit_rate > 0 else 'green'
+            
+            ax1.scatter([x_buy], [y_buy], color='blue', marker='>', s=100, zorder=5)
+            ax1.scatter([x_current], [y_current], color='purple', marker='o', s=100, zorder=5)
+            
+            is_top = i % 2 == 0
+            
+            buy_date_str = str(buy_day)[4:]
+            current_date_str = str(current_day)[4:]
+            
+            full_label = (
+                f'{code} {name_short}\n'
+                f'买:{buy_date_str} {buy_price:.2f}元\n'
+                f'持:{current_date_str} {current_price:.2f}元\n'
+                f'{profit_rate:+.1f}% | {hold_days}天 | 持仓中'
+            )
+            
+            mid_x = (x_buy + x_current) / 2
+            mid_y = (y_buy + y_current) / 2
+            
+            trade_span = x_current - x_buy
+            base_offset = max(60, min(100, trade_span * 8))
+            
+            if is_top:
+                y_offset = base_offset + (i % 3) * 35
+            else:
+                y_offset = -base_offset - (i % 3) * 35
+            
+            box_x = mid_x
+            box_y = mid_y + y_offset * (max(values) - min(values)) / 800 if len(values) > 1 else mid_y + y_offset
+            
+            if is_top:
+                rad_buy = 0.15
+                rad_current = -0.15
+            else:
+                rad_buy = -0.15
+                rad_current = 0.15
+            
+            ax1.annotate('', xy=(x_buy, y_buy), xytext=(box_x, box_y),
+                        arrowprops=dict(arrowstyle='->', color='blue', lw=1.2, connectionstyle=f'arc3,rad={rad_buy}'))
+            
+            ax1.annotate('', xy=(x_current, y_current), xytext=(box_x, box_y),
+                        arrowprops=dict(arrowstyle='->', color='purple', lw=1.2, connectionstyle=f'arc3,rad={rad_current}'))
+            
+            ax1.text(box_x, box_y, full_label, fontsize=7, color='black',
+                    ha='center', va='center',
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', alpha=0.95,
+                             edgecolor=trade_color, lw=2, linestyle='--'))
 
         ax1.set_ylabel('资金（元）', fontsize=12, color='navy')
         ax1.set_xlabel('日期', fontsize=12)
@@ -310,8 +386,8 @@ class Chain:
         from matplotlib.lines import Line2D
         legend_elements = [
             Line2D([0], [0], marker='>', color='w', markerfacecolor='blue', markersize=10, label='买入点'),
-            Line2D([0], [0], marker='s', color='w', markerfacecolor='red', markersize=10, label='卖出点(盈利)'),
-            Line2D([0], [0], marker='s', color='w', markerfacecolor='green', markersize=10, label='卖出点(亏损)'),
+            Line2D([0], [0], marker='s', color='w', markerfacecolor='gold', markersize=10, label='卖出点'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='purple', markersize=10, label='持仓中'),
             Line2D([0], [0], color='navy', lw=2, label='总资产')
         ]
         ax1.legend(handles=legend_elements, loc='upper left', fontsize=10)
