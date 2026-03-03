@@ -27,10 +27,10 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    1|-1,5,10,-1,10,30,2|0|-7,9,7,3
+    1|-1,-1,10,30,15,-1,2|1|-9,8,10,3
     """
-    # bt_one(s,sc().get_date_arr())
+    bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20260101]])
     # bt_one(s,[[20250101,20260302]])
-    bt_one(s,[[20260101,20260302]])
+    # bt_one(s,[[20260101,20260302]])
     

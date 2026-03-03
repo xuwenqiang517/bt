@@ -86,10 +86,10 @@ class Chain:
 
         for idx in range(start_idx, end_idx + 1):
             date = calendar.get_date(idx)
-            day_data = stock_data.get_numpy_data_by_date(date)
-            if day_data is not None and len(day_data.code) > 0:
+            pick_data = stock_data.get_pick_data_by_date(date)
+            if pick_data is not None and len(pick_data.code) > 0:
                 # 使用当日平均涨跌幅（使用属性访问替代dict查找）
-                avg_change = np.mean(day_data.change_pct)
+                avg_change = np.mean(pick_data.change_pct)
                 total_return += avg_change
                 count += 1
 
@@ -152,16 +152,16 @@ class Chain:
         last_day_data = daily_values[-1] if daily_values else None
         unsold_holdings = []
         if last_day_data:
-            last_date = last_day_data['date']
-            last_holdings = last_day_data.get('holdings', [])
+            last_date = last_day_data.date
+            last_holdings = last_day_data.holdings if last_day_data.holdings else []
             for h in last_holdings:
-                if h['code'] not in sold_codes:
+                if h.code not in sold_codes:
                     unsold_holdings.append({
-                        'code': h['code'],
-                        'buy_price': h['buy_price'],
-                        'current_price': h['close_price'],
-                        'profit_rate': h['profit_rate'],
-                        'buy_day': h.get('buy_day', last_date),  # 如果没有buy_day，用最后一天
+                        'code': h.code,
+                        'buy_price': h.buy_price,
+                        'current_price': h.close_price,
+                        'profit_rate': h.profit_rate,
+                        'buy_day': h.buy_day if h.buy_day else last_date,  # 如果没有buy_day，用最后一天
                         'current_day': last_date
                     })
         
@@ -184,7 +184,7 @@ class Chain:
             sell_price = trade.sell_price / 100
             profit_rate = trade.profit_rate * 100
             profit = trade.profit / 100
-            reason = trade.get('reason', '')
+            reason = trade.reason if trade.reason else ''
 
             hold_days = sell_idx - buy_idx
 

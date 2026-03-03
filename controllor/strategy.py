@@ -1,7 +1,7 @@
 import logger_config  # 导入日志配置，重定向stdout到log.txt
 import sys
 from stock_calendar import StockCalendar as sc
-from stock_data import StockData as sd, DayData
+from stock_data import StockData as sd, PickData, FullData
 import polars as pl
 import numpy as np
 from numba import njit
@@ -10,9 +10,10 @@ from dto import *
 from dto import ResultSchema, TradeRecord, DailyValue
 
 @njit(cache=True)
-def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
+def _filter_numba(up_days, change_3d, change_5d, change_pct,
                   buy_up_day_min, buy_up_day_max, buy_day3_min, buy_day3_max, buy_day5_min, buy_day5_max, change_pct_max):
     """Numba JIT 编译的筛选函数
+    注意：量比>1 和 10天内无涨停 已在数据层前置过滤，此处不再检查
     buy_up_day_min: 连涨天数下限要求，-1表示不限制
     buy_up_day_max: 连涨天数上限要求，-1表示不限制（用于避免追高）
     buy_day3_min: 3日涨幅下限要求，-1表示不限制
@@ -20,9 +21,6 @@ def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d,
     buy_day5_min: 5日涨幅下限要求，-1表示不限制
     buy_day5_max: 5日涨幅上限要求，-1表示不限制（用于避免短期涨幅过大）
     change_pct_max: 当日涨幅上限，-1表示不限制
-    量比: 已内置固定>1
-    涨停条件: 已内置固定为0（10天内无涨停）
-    日内振幅参数已移除（回测证明效果不明显）
     """
     n = len(up_days)
     result = np.empty(n, dtype=np.bool_)
@@ -41,12 +39,8 @@ def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d,
         day5_max_ok = (buy_day5_max == -1) or (change_5d[i] < buy_day5_max)
         # 当日涨幅上限条件（-1表示不限制）
         pct_ok = (change_pct_max == -1) or (change_pct[i] < change_pct_max)
-        # 量比条件：内置固定>1
-        volume_ok = volume_ratio[i] > 1.0
-        # 涨停条件：内置固定为0（10天内无涨停）
-        limit_ok = limit_up_count_10d[i] == 0
 
-        result[i] = up_min_ok and up_max_ok and day3_min_ok and day3_max_ok and day5_min_ok and day5_max_ok and pct_ok and volume_ok and limit_ok
+        result[i] = up_min_ok and up_max_ok and day3_min_ok and day3_max_ok and day5_min_ok and day5_max_ok and pct_ok
     return result
 
 
@@ -193,15 +187,14 @@ class Strategy:
         buy_day5_max = self.buy_param_arr[5] if len(self.buy_param_arr) > 5 else -1
         change_pct_max = self.buy_param_arr[6] if len(self.buy_param_arr) > 6 else 5
 
-        def filter_func(numpy_data):
+        def filter_func(pick_data: PickData):
             # 使用属性访问替代dict查找
+            # 注意：量比>1 和 10天内无涨停 已在数据层前置过滤
             mask = _filter_numba(
-                numpy_data.consecutive_up_days,
-                numpy_data.change_3d,
-                numpy_data.change_5d,
-                numpy_data.change_pct,
-                numpy_data.limit_up_count_10d,
-                numpy_data.volume_ratio,
+                pick_data.consecutive_up_days,
+                pick_data.change_3d,
+                pick_data.change_5d,
+                pick_data.change_pct,
                 buy_up_day_min, buy_up_day_max, buy_day3_min, buy_day3_max, buy_day5_min, buy_day5_max, change_pct_max
             )
             return mask
@@ -233,7 +226,7 @@ class Strategy:
         self.free_amount = self.init_amount
         self.hold: list[HoldStock] = []
         self.hold_codes: set[int] = set()
-        self.picked_numpy_data: DayData | None = None
+        self.picked_numpy_data: PickData | None = None
         self.trades_history: list[TradeRecord] = []
         self.daily_values: list[DailyValue] = []
         self.today: int | None = None
@@ -321,15 +314,15 @@ class Strategy:
                 if self.debug:
                     print(f"筛选参数变化，清理所有缓存: {filter_key}")
 
-            numpy_data = self.data.get_numpy_data_by_date(today)
-            if numpy_data is None or len(numpy_data.code) == 0:
+            pick_data = self.data.get_pick_data_by_date(today)
+            if pick_data is None or len(pick_data.code) == 0:
                 self.picked_numpy_data = None
                 cache.sort_cache[sort_cache_key] = None
                 if self.debug:
                     print(f"日期 {today} 无符合条件股票")
                 return
 
-            mask = self._pick_filter(numpy_data)
+            mask = self._pick_filter(pick_data)
             if not mask.any():
                 self.picked_numpy_data = None
                 cache.sort_cache[sort_cache_key] = None
@@ -338,24 +331,19 @@ class Strategy:
                 return
 
             # 保存筛选结果（未排序的原始数据，包含所有可能用于排序的字段）
-            # 使用DayData替代dict，保持一致性并提升访问速度
-            filtered_data = DayData(
-                code=numpy_data.code[mask],
-                open_=numpy_data.open[mask],
-                close=numpy_data.close[mask],
-                high=numpy_data.high[mask],
-                low=numpy_data.low[mask],
-                volume=numpy_data.volume[mask],
-                next_open=numpy_data.next_open[mask],
-                price_limit_status=numpy_data.price_limit_status[mask],
-                consecutive_up_days=numpy_data.consecutive_up_days[mask],
-                change_3d=numpy_data.change_3d[mask],
-                change_5d=numpy_data.change_5d[mask],
-                change_pct=numpy_data.change_pct[mask],
-                limit_up_count_10d=numpy_data.limit_up_count_10d[mask],
-                volume_ratio=numpy_data.volume_ratio[mask],
-                amount=numpy_data.amount[mask],
-                code_to_idx=None  # 缓存数据不需要反向查找
+            # 使用PickData，数据已前置过滤（量比>1且10天内无涨停）
+            filtered_data = PickData(
+                code=pick_data.code[mask],
+                open_=pick_data.open[mask],
+                close=pick_data.close[mask],
+                high=pick_data.high[mask],
+                low=pick_data.low[mask],
+                volume=pick_data.volume[mask],
+                next_open=pick_data.next_open[mask],
+                consecutive_up_days=pick_data.consecutive_up_days[mask],
+                change_3d=pick_data.change_3d[mask],
+                change_5d=pick_data.change_5d[mask],
+                change_pct=pick_data.change_pct[mask]
             )
 
             # 存入筛选缓存 - 使用扁平化键
@@ -364,24 +352,10 @@ class Strategy:
         # 使用排序器对筛选结果排序
         sorted_indices = self._pick_sorter(filtered_data)
 
-        # 使用DayData替代dict
-        self.picked_numpy_data = DayData(
+        # 使用PickData，精简字段
+        self.picked_numpy_data = PickData(
             code=filtered_data.code[sorted_indices],
-            open_=None,  # 排序后只需要这三个字段
-            close=None,
-            high=None,
-            low=None,
-            volume=None,
-            next_open=filtered_data.next_open[sorted_indices],
-            price_limit_status=filtered_data.price_limit_status[sorted_indices],
-            consecutive_up_days=None,
-            change_3d=None,
-            change_5d=None,
-            change_pct=None,
-            limit_up_count_10d=None,
-            volume_ratio=None,
-            amount=None,
-            code_to_idx=None
+            next_open=filtered_data.next_open[sorted_indices]
         )
 
         # 存入排序缓存 - 使用扁平化键
@@ -411,8 +385,8 @@ class Strategy:
 
     def buy(self) -> None:
         """执行买入操作 - 优化仓位分配"""
-        numpy_data = self.picked_numpy_data
-        if numpy_data is None or len(numpy_data.code) == 0:
+        pick_data = self.picked_numpy_data
+        if pick_data is None or len(pick_data.code) == 0:
             return
 
         hold = self.hold
@@ -427,15 +401,20 @@ class Strategy:
         today = self.today
 
         # 直接使用 NumPy 数组（使用属性访问替代dict查找）
-        codes = numpy_data.code
-        next_opens = numpy_data.next_open
-        price_limit_status = numpy_data.price_limit_status
+        codes = pick_data.code
+        next_opens = pick_data.next_open
         hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
 
         # 计算买入金额 - 基于剩余资金和剩余持仓数动态分配
         # 每只买入金额 = 剩余资金 / 剩余持仓数量
         # 这样确保资金充分利用，每只仓位均匀
         base_amount = int(free_amount / remaining_hold_count)
+
+        # 从完整数据中获取涨停状态（O(1)查询）
+        price_limit_status = np.array([
+            self.data.get_full_data_by_date_code(today, int(code)).price_limit_status
+            for code in codes
+        ], dtype=np.int8)
 
         # 统计过滤原因
         if self.debug:
@@ -505,21 +484,21 @@ class Strategy:
                     skip_today_count += 1
                 continue
 
-            # 获取股票数据，idx为-1表示无数据
-            day_data, idx = self.data.get_data_by_date_code(today, code)
-            if idx == -1:
+            # 获取股票完整数据，O(1)查询
+            full_data = self.data.get_full_data_by_date_code(today, code)
+            if full_data.close == 0:  # 空数据检查
                 if is_debug:
                     no_data_count += 1
                     code_display = self.data.get_stock_display(code) if self.data else str(code)
                     print(f"日期 {today} 股票 {code_display} 无数据,跳过卖出")
                 continue
 
-            # 按需从numpy数组取值（使用属性访问替代dict查找）
-            open_price = day_data.open[idx]
-            close_price = day_data.close[idx]
-            high_price = day_data.high[idx]
-            low_price = day_data.low[idx]
-            price_limit_status = day_data.price_limit_status[idx]
+            # 直接从FullData对象取值
+            open_price = full_data.open
+            close_price = full_data.close
+            high_price = full_data.high
+            low_price = full_data.low
+            price_limit_status = full_data.price_limit_status
 
             if price_limit_status == 2:
                 if is_debug:
@@ -674,17 +653,17 @@ class Strategy:
 
         for hold_stock in hold:
             code = hold_stock.code
-            # 获取股票数据，idx为-1表示无数据
-            day_data, idx = self.data.get_data_by_date_code(today, code)
+            # 获取股票完整数据，O(1)查询
+            full_data = self.data.get_full_data_by_date_code(today, code)
 
-            if idx == -1:
+            if full_data.close == 0:  # 空数据检查
                 if is_debug:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
                 continue
 
-            # 按需从numpy数组取值（使用属性访问替代dict查找）
-            close_price = day_data.close[idx]
-            high_price = day_data.high[idx]
+            # 直接从FullData对象取值
+            close_price = full_data.close
+            high_price = full_data.high
             buy_price = hold_stock.buy_price
             buy_count = hold_stock.buy_count
 
@@ -766,13 +745,13 @@ class Strategy:
             last_date = self.today
             for hold_stock in hold:
                 code = hold_stock.code
-                # 获取股票数据，idx为-1表示无数据
-                day_data, idx = self.data.get_data_by_date_code(last_date, code)
-                if idx == -1:
+                # 获取股票完整数据，O(1)查询
+                full_data = self.data.get_full_data_by_date_code(last_date, code)
+                if full_data.close == 0:  # 空数据检查
                     final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
                 else:
-                    # 从numpy数组取close价格（使用属性访问替代dict查找）
-                    close_price = day_data.close[idx]
+                    # 直接从FullData对象取close价格
+                    close_price = full_data.close
                     final_holdings_value += close_price * hold_stock.buy_count
 
         free_amount = self.free_amount
