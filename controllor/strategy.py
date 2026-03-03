@@ -167,6 +167,7 @@ class Strategy:
         self._slippage_rate = 0.001      # 滑点率 0.1%
         self.data = None
         self.calendar = None
+        self.today_index = 0             # 当前日期在交易日历中的索引，避免重复dict查找
         self.debug = debug
         # 预计算两级缓存参数标识
         self._filter_key = self._compute_filter_key()
@@ -442,7 +443,8 @@ class Strategy:
             buy_count = int(valid_counts[i])
             # 加入滑点：买入价格上浮
             buy_price_with_slippage = int(next_open * (1 + self._slippage_rate))
-            hold_stock = HoldStock(code, buy_price_with_slippage, buy_count, today)
+            # 使用策略中缓存的 today_index，避免重复dict查找
+            hold_stock = HoldStock(code, buy_price_with_slippage, buy_count, today, self.today_index)
             self._add_hold(hold_stock)
             # 计算成本：股票价格 + 手续费
             stock_cost = buy_count * buy_price_with_slippage
@@ -483,23 +485,31 @@ class Strategy:
                     skip_today_count += 1
                 continue
 
-            stock_data_dict = self.data.get_data_by_date_code(today, code)
-            if stock_data_dict is None:
+            # 获取股票数据，idx为-1表示无数据
+            day_data, idx = self.data.get_data_by_date_code(today, code)
+            if idx == -1:
                 if is_debug:
                     no_data_count += 1
                     code_display = self.data.get_stock_display(code) if self.data else str(code)
                     print(f"日期 {today} 股票 {code_display} 无数据,跳过卖出")
                 continue
 
-            if stock_data_dict['price_limit_status'] == 2:
+            # 按需从numpy数组取值
+            open_price = day_data['open'][idx]
+            close_price = day_data['close'][idx]
+            high_price = day_data['high'][idx]
+            low_price = day_data['low'][idx]
+            price_limit_status = day_data['price_limit_status'][idx]
+
+            if price_limit_status == 2:
                 if is_debug:
                     limit_down_count += 1
                     code_display = self.data.get_stock_display(code) if self.data else str(code)
                     print(f"日期 {today} 股票 {code_display} 跌停,无法卖出")
                 continue
 
-            # 调用统一的卖出策略
-            need_sell, sell_price, log_reason, stat_reason = self._check_sell(hold_stock, stock_data_dict)
+            # 调用统一的卖出策略，传入元组数据
+            need_sell, sell_price, log_reason, stat_reason = self._check_sell(hold_stock, open_price, close_price, high_price, low_price)
             if is_debug:
                 buy_price = hold_stock.buy_price
                 log_reason = f"\033[91m{log_reason}\033[0m" if sell_price > buy_price else f"\033[92m{log_reason}\033[0m"
@@ -562,7 +572,7 @@ class Strategy:
                     print(f"日期 {today} 卖出 {code_display} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{log_reason} 盈亏 {profit}({profit_rate:.2%}), 手续费{comm}, 剩余资金 {free_amount:.2f}")
                 
 
-    def _check_sell(self, hold: HoldStock, stock_data_dict: dict) -> tuple[bool, int, str, str]:
+    def _check_sell(self, hold: HoldStock, open_price: int, close_price: int, high_price: int, low_price: int) -> tuple[bool, int, str, str]:
         """
         统一卖出策略：止损 + 贪婪止盈
         使用Numba加速核心计算
@@ -571,11 +581,7 @@ class Strategy:
         """
         is_debug = self.debug
 
-        # 提取数据
-        open_price = stock_data_dict['open']
-        close_price = stock_data_dict['close']
-        high_price = stock_data_dict['high']
-        low_price = stock_data_dict['low']
+        # 直接使用传入的价格数据
         buy_price = hold.buy_price
         highest_price = hold.highest_price
 
@@ -584,8 +590,8 @@ class Strategy:
         target_return_price = int(buy_price * (1 + self._target_return))
         trailing_stop_price = int(highest_price * (1 - self._trailing_rate)) if highest_price > 0 else 0
 
-        # 获取持仓天数
-        hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
+        # 获取持仓天数：使用缓存的索引直接计算，纯整数减法
+        hold_days = self.today_index - hold.buy_day_index + 1
 
         # 使用Numba进行核心计算
         need_sell, sell_price = _check_sell_numba(
@@ -648,15 +654,17 @@ class Strategy:
 
         for hold_stock in hold:
             code = hold_stock.code
-            stock_data = self.data.get_data_by_date_code(today, code)
+            # 获取股票数据，idx为-1表示无数据
+            day_data, idx = self.data.get_data_by_date_code(today, code)
 
-            if stock_data is None:
+            if idx == -1:
                 if is_debug:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
                 continue
 
-            close_price = stock_data['close']
-            high_price = stock_data['high']
+            # 按需从numpy数组取值
+            close_price = day_data['close'][idx]
+            high_price = day_data['high'][idx]
             buy_price = hold_stock.buy_price
             buy_count = hold_stock.buy_count
 
@@ -666,7 +674,8 @@ class Strategy:
             # 计算持仓盈亏
             profit_cents = (close_price - buy_price) * buy_count
             profit_rate = (close_price - buy_price) / buy_price if buy_price > 0 else 0
-            hold_days = self.calendar.gap(hold_stock.buy_day, today) if self.calendar else 0
+            # 使用缓存的索引直接计算持仓天数，纯整数减法
+            hold_days = self.today_index - hold_stock.buy_day_index + 1
             market_value = close_price * buy_count
 
             daily_holdings.append({
@@ -710,9 +719,10 @@ class Strategy:
             print(f"日期 {today} 持有股票总市值 {hold_amount_元:.2f}, 可用资金 {free_amount_元:.2f}, 总资产 {total_value_元:.2f}")
             print("\n")
     
-    def update_today(self, today: int) -> None:
-        """更新当前日期"""
+    def update_today(self, today: int, today_index: int = 0) -> None:
+        """更新当前日期和索引"""
         self.today = today
+        self.today_index = today_index  # 缓存日期索引，避免重复dict查找
 
     def calculate_performance(self, start_date: int, end_date: int, calc_sharpe: bool = False) -> BacktestResult:
         """计算并返回策略性能指标
@@ -736,11 +746,13 @@ class Strategy:
             last_date = self.today
             for hold_stock in hold:
                 code = hold_stock.code
-                stock_data_dict = self.data.get_data_by_date_code(last_date, code)
-                if stock_data_dict is None:
+                # 获取股票数据，idx为-1表示无数据
+                day_data, idx = self.data.get_data_by_date_code(last_date, code)
+                if idx == -1:
                     final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
                 else:
-                    close_price = stock_data_dict['close']
+                    # 从numpy数组取close价格
+                    close_price = day_data['close'][idx]
                     final_holdings_value += close_price * hold_stock.buy_count
 
         free_amount = self.free_amount

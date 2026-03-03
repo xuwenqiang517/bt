@@ -200,17 +200,19 @@ class HoldStock:
         "buy_price",     # 买入价格（建议用float，实际价格多为小数）
         "buy_count",     # 买入数量
         "buy_day",       # 买入日期
+        "buy_day_index", # 买入日期在交易日历中的索引，用于快速计算持仓天数
         "sell_price",    # 卖出价格（初始可设为None）
         "sell_day",      # 卖出日期（初始可设为None）
-        "highest_price"  # 持仓期间最高价（初始可设为买入价）
+        "highest_price"  # 持仓期间最高价（初始为买入价）
     ]
-    
-    def __init__(self, code, buy_price, buy_count, buy_day):
+
+    def __init__(self, code, buy_price, buy_count, buy_day, buy_day_index=0):
         # 初始化必填的买入信息
         self.code = code
         self.buy_price = buy_price
         self.buy_count = buy_count
         self.buy_day = buy_day
+        self.buy_day_index = buy_day_index  # 交易日历索引，避免重复查表
         # 初始化可变字段（卖出相关为None，最高价初始为买入价）
         self.sell_price = None
         self.sell_day = None

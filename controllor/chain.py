@@ -552,37 +552,31 @@ class Chain:
             if current_idx == -1:
                 continue
 
-            next_idx = calendar.next(current_idx)
-            if next_idx == -1:
-                continue
+            next_idx = current_idx + 1  # 直接+1，下一个交易日索引
 
             # 获取次日的开盘价（买入价）
             buy_date = calendar.get_date(next_idx)
-            buy_data = stock_data.get_data_by_date_code(buy_date, code)
-            if buy_data is None:
+            # 获取股票数据，idx为-1表示无数据
+            buy_day_data, buy_idx = stock_data.get_data_by_date_code(buy_date, code)
+            if buy_idx == -1:
                 continue
-            buy_price = buy_data['open']
+            # 从numpy数组取open价格
+            buy_price = buy_day_data['open'][buy_idx]
 
             # 获取未来1/3/5个交易日的收盘价
             for days in [1, 3, 5]:
                 # 找到N个交易日后的日期（从次日开始算）
-                target_idx = next_idx
-                for _ in range(days - 1):  # 已经在次日，所以只需要再移动days-1天
-                    target_idx = calendar.next(target_idx)
-                    if target_idx == -1:
-                        break
-
-                if target_idx == -1:
-                    continue
+                target_idx = next_idx + days - 1  # 直接计算索引，避免循环调用next
 
                 sell_date = calendar.get_date(target_idx)
 
-                # 获取卖出日期的收盘价
-                sell_data = stock_data.get_data_by_date_code(sell_date, code)
-                if sell_data is None:
+                # 获取卖出日期的收盘价，idx为-1表示无数据
+                sell_day_data, sell_idx = stock_data.get_data_by_date_code(sell_date, code)
+                if sell_idx == -1:
                     continue
 
-                sell_price = sell_data['close']
+                # 从numpy数组取close价格
+                sell_price = sell_day_data['close'][sell_idx]
                 profit_rate = (sell_price - buy_price) / buy_price if buy_price > 0 else 0
                 stats[days]['profits'].append(profit_rate)
 
@@ -775,13 +769,13 @@ class Chain:
 
         while current_idx != -1 and current_idx <= end_idx:
             current_date = scalendar.get_date(current_idx)
-            strategy.update_today(current_date)
+            strategy.update_today(current_date, current_idx)  # 传入日期索引，避免重复dict查找
             # 固定先卖后买
             strategy.sell()
             strategy.buy()
             strategy.pick()
             strategy.settle_amount()
-            current_idx = scalendar.next(current_idx)
+            current_idx += 1  # 直接+1，下一个交易日索引
 
         result = strategy.calculate_performance(start_date, end_date, calc_sharpe)
 

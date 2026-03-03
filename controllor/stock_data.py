@@ -143,21 +143,16 @@ class StockData:
         """获取当天所有股票的NumPy数据（用于批量筛选）"""
         return self.date_numpy_dict.get(today)
 
-    def get_data_by_date_code(self, today: int, code: int) -> dict | None:
-        """精确查询某只股票的数据，O(1)复杂度"""
+    def get_data_by_date_code(self, today: int, code: int) -> tuple[dict, int]:
+        """精确查询某只股票的数据，O(1)复杂度
+        返回: (day_data, idx)，idx为-1表示无数据，避免None判断开销
+        """
         day_data = self.date_numpy_dict.get(today)
         if day_data is None:
-            return None
-        idx = day_data['_code_to_idx'].get(code)
-        if idx is None:
-            return None
-        return {
-            'open': day_data['open'][idx],
-            'close': day_data['close'][idx],
-            'high': day_data['high'][idx],
-            'low': day_data['low'][idx],
-            'price_limit_status': day_data['price_limit_status'][idx]
-        }
+            return {}, -1
+        idx = day_data['_code_to_idx'].get(code, -1)
+        # 返回原始数据和索引，避免创建元组的开销
+        return day_data, idx
 
     def get_stock_name(self, code: int | str) -> str:
         """根据股票代码获取股票名称"""
@@ -336,5 +331,9 @@ if __name__ == "__main__":
     print("测试按日期获取数据")
     # print(sd.get_numpy_data_by_date(20250707))
     print("测试按日期和代码获取数据")
-    print(sd.get_data_by_date_code(20250102,721))
+    day_data, idx = sd.get_data_by_date_code(20250102, 721)
+    if idx != -1:
+        print(f"open={day_data['open'][idx]}, close={day_data['close'][idx]}, high={day_data['high'][idx]}, low={day_data['low'][idx]}, price_limit_status={day_data['price_limit_status'][idx]}")
+    else:
+        print("None")
 

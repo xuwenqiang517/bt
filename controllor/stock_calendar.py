@@ -71,36 +71,6 @@ class StockCalendar:
 
         return -1
 
-    def next(self, current_idx: int = None) -> int:
-        """
-        获取下一个交易日索引
-        """
-        if current_idx is None:
-            current_idx = self.start_index
-        if current_idx < len(self.df) - 1:
-            next_idx = current_idx + 1
-            self.start_index = next_idx
-            return next_idx
-        return -1
-
-    def gap(self, start: int, end: int) -> int:
-        """
-        计算 start 到 end 之间的交易日数量，使用预计算的日期范围快速判断
-        """
-        # 快速范围检查（避免两次dict查找）
-        if start < self._min_date or start > self._max_date or end < self._min_date or end > self._max_date:
-            return -1
-
-        start_index = self.date_to_index.get(start, -1)
-        if start_index == -1:
-            return -1
-
-        end_index = self.date_to_index.get(end, -1)
-        if end_index == -1 or start_index > end_index:
-            return -1
-
-        return end_index - start_index + 1
-
     def get_date(self, idx: int) -> int:
         """
         根据索引获取日期，使用预转换的列表实现 O(1) 时间复杂度

@@ -7,7 +7,7 @@ def main():
     # Run profiling on the actual bt_all function with new parameters
     # Use 1 processor and limit to 500 strategy parameters
     profile_file = "bt2_main_profile.out"
-    cProfile.runctx('bt2.bt_all(processor_count=1, fail_count=2, max_strategy_count=500)', globals(), locals(), profile_file)
+    cProfile.runctx('bt2.bt_all(processor_count=1, fail_count=20, max_strategy_count=5000)', globals(), locals(), profile_file)
     
     # Print statistics with filter to exclude stock_data.py and bt2.py operations
     print("Profiling results (top 20 by cumulative time, excluding stock_data.py and bt2.py):")
