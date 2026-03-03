@@ -11,6 +11,38 @@ pl.Config.set_tbl_cols(100)
 # pl 显示所有列
 pl.Config.set_tbl_rows(10)
 
+
+class DayData:
+    """使用 __slots__ 优化内存和访问速度，替代 dict"""
+    __slots__ = ['code', 'open', 'close', 'high', 'low', 'volume', 'next_open',
+                 'price_limit_status', 'consecutive_up_days', 'change_3d', 'change_5d',
+                 'change_pct', 'limit_up_count_10d', 'volume_ratio', 'amount', '_code_to_idx']
+
+    def __init__(self, code=None, open_=None, close=None, high=None, low=None, volume=None, next_open=None,
+                 price_limit_status=None, consecutive_up_days=None, change_3d=None, change_5d=None,
+                 change_pct=None, limit_up_count_10d=None, volume_ratio=None, amount=None, code_to_idx=None):
+        self.code = code
+        self.open = open_
+        self.close = close
+        self.high = high
+        self.low = low
+        self.volume = volume
+        self.next_open = next_open
+        self.price_limit_status = price_limit_status
+        self.consecutive_up_days = consecutive_up_days
+        self.change_3d = change_3d
+        self.change_5d = change_5d
+        self.change_pct = change_pct
+        self.limit_up_count_10d = limit_up_count_10d
+        self.volume_ratio = volume_ratio
+        self.amount = amount
+        self._code_to_idx = code_to_idx
+
+
+# 空DayData对象，用于无数据时返回，避免重复创建
+_EMPTY_DAY_DATA = DayData()
+
+
 class StockData:
 
     def __init__(self, force_refresh=False):
@@ -117,40 +149,41 @@ class StockData:
             group = group.sort("volume", descending=False)  # 按成交量升序排列（选冷门股）
             date_dict[trade_date] = group
 
-            # 统一数据结构：NumPy数组 + code到索引的映射
+            # 统一数据结构：使用DayData类替代dict，优化访问速度
             codes = group['code'].to_numpy()
-            self.date_numpy_dict[trade_date] = {
-                'code': codes,
-                'open': group['open'].to_numpy(),
-                'close': group['close'].to_numpy(),
-                'high': group['high'].to_numpy(),
-                'low': group['low'].to_numpy(),
-                'volume': group['volume'].to_numpy(),
-                'next_open': group['next_open'].to_numpy(),
-                'price_limit_status': group['price_limit_status'].to_numpy(),
-                'consecutive_up_days': group['consecutive_up_days'].to_numpy(),
-                'change_3d': group['change_3d'].to_numpy(),
-                'change_5d': group['change_5d'].to_numpy(),
-                'change_pct': group['change_pct'].to_numpy(),
-                'limit_up_count_10d': group['limit_up_count_10d'].to_numpy(),
-                'volume_ratio': group['volume_ratio'].to_numpy(),
-                'amount': group['amount'].to_numpy(),
-                '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
-            }
+            self.date_numpy_dict[trade_date] = DayData(
+                code=codes,
+                open_=group['open'].to_numpy(),
+                close=group['close'].to_numpy(),
+                high=group['high'].to_numpy(),
+                low=group['low'].to_numpy(),
+                volume=group['volume'].to_numpy(),
+                next_open=group['next_open'].to_numpy(),
+                price_limit_status=group['price_limit_status'].to_numpy(),
+                consecutive_up_days=group['consecutive_up_days'].to_numpy(),
+                change_3d=group['change_3d'].to_numpy(),
+                change_5d=group['change_5d'].to_numpy(),
+                change_pct=group['change_pct'].to_numpy(),
+                limit_up_count_10d=group['limit_up_count_10d'].to_numpy(),
+                volume_ratio=group['volume_ratio'].to_numpy(),
+                amount=group['amount'].to_numpy(),
+                code_to_idx={int(code): idx for idx, code in enumerate(codes)}
+            )
         return date_dict
 
-    def get_numpy_data_by_date(self, today: int) -> dict:
+    def get_numpy_data_by_date(self, today: int) -> DayData | None:
         """获取当天所有股票的NumPy数据（用于批量筛选）"""
         return self.date_numpy_dict.get(today)
 
-    def get_data_by_date_code(self, today: int, code: int) -> tuple[dict, int]:
+    def get_data_by_date_code(self, today: int, code: int) -> tuple[DayData, int]:
         """精确查询某只股票的数据，O(1)复杂度
         返回: (day_data, idx)，idx为-1表示无数据，避免None判断开销
         """
         day_data = self.date_numpy_dict.get(today)
         if day_data is None:
-            return {}, -1
-        idx = day_data['_code_to_idx'].get(code, -1)
+            # 返回空DayData对象，避免调用者处理None
+            return _EMPTY_DAY_DATA, -1
+        idx = day_data._code_to_idx.get(code, -1)
         # 返回原始数据和索引，避免创建元组的开销
         return day_data, idx
 
@@ -333,7 +366,7 @@ if __name__ == "__main__":
     print("测试按日期和代码获取数据")
     day_data, idx = sd.get_data_by_date_code(20250102, 721)
     if idx != -1:
-        print(f"open={day_data['open'][idx]}, close={day_data['close'][idx]}, high={day_data['high'][idx]}, low={day_data['low'][idx]}, price_limit_status={day_data['price_limit_status'][idx]}")
+        print(f"open={day_data.open[idx]}, close={day_data.close[idx]}, high={day_data.high[idx]}, low={day_data.low[idx]}, price_limit_status={day_data.price_limit_status[idx]}")
     else:
         print("None")
 

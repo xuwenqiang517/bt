@@ -87,9 +87,9 @@ class Chain:
         for idx in range(start_idx, end_idx + 1):
             date = calendar.get_date(idx)
             day_data = stock_data.get_numpy_data_by_date(date)
-            if day_data is not None and len(day_data['code']) > 0:
-                # 使用当日平均涨跌幅
-                avg_change = np.mean(day_data['change_pct'])
+            if day_data is not None and len(day_data.code) > 0:
+                # 使用当日平均涨跌幅（使用属性访问替代dict查找）
+                avg_change = np.mean(day_data.change_pct)
                 total_return += avg_change
                 count += 1
 
@@ -127,9 +127,9 @@ class Chain:
         save_path = data_dir / file_name
 
         # 准备数据
-        dates = [f"{dv['date']:08d}" for dv in daily_values]
-        values = [dv['value'] / 100 for dv in daily_values]
-        date_to_idx = {dv['date']: i for i, dv in enumerate(daily_values)}
+        dates = [f"{dv.date:08d}" for dv in daily_values]
+        values = [dv.value / 100 for dv in daily_values]
+        date_to_idx = {dv.date: i for i, dv in enumerate(daily_values)}
 
         # 创建数值索引用于画图（避免字符串日期导致的分类轴问题）
         x_indices = list(range(len(dates)))
@@ -146,7 +146,7 @@ class Chain:
         ax1.plot(x_indices, values, label='总资产', linewidth=2, color='navy', alpha=0.8)
 
         # 收集已卖出的股票代码
-        sold_codes = {trade['code'] for trade in trades_history}
+        sold_codes = {trade.code for trade in trades_history}
         
         # 获取最后一天未卖出的持仓
         last_day_data = daily_values[-1] if daily_values else None
@@ -167,8 +167,8 @@ class Chain:
         
         # 标注所有已完成的交易
         for i, trade in enumerate(trades_history):
-            sell_date = trade['date']
-            buy_date = trade['buy_date']
+            sell_date = trade.date
+            buy_date = trade.buy_date
             if sell_date not in date_to_idx or buy_date not in date_to_idx:
                 continue
 
@@ -179,11 +179,11 @@ class Chain:
             x_buy = x_indices[buy_idx]
             y_buy = values[buy_idx]
 
-            code = trade['code']
-            buy_price = trade['buy_price'] / 100
-            sell_price = trade['sell_price'] / 100
-            profit_rate = trade['profit_rate'] * 100
-            profit = trade['profit'] / 100
+            code = trade.code
+            buy_price = trade.buy_price / 100
+            sell_price = trade.sell_price / 100
+            profit_rate = trade.profit_rate * 100
+            profit = trade.profit / 100
             reason = trade.get('reason', '')
 
             hold_days = sell_idx - buy_idx
@@ -560,8 +560,8 @@ class Chain:
             buy_day_data, buy_idx = stock_data.get_data_by_date_code(buy_date, code)
             if buy_idx == -1:
                 continue
-            # 从numpy数组取open价格
-            buy_price = buy_day_data['open'][buy_idx]
+            # 从numpy数组取open价格（使用属性访问替代dict查找）
+            buy_price = buy_day_data.open[buy_idx]
 
             # 获取未来1/3/5个交易日的收盘价
             for days in [1, 3, 5]:
@@ -575,8 +575,8 @@ class Chain:
                 if sell_idx == -1:
                     continue
 
-                # 从numpy数组取close价格
-                sell_price = sell_day_data['close'][sell_idx]
+                # 从numpy数组取close价格（使用属性访问替代dict查找）
+                sell_price = sell_day_data.close[sell_idx]
                 profit_rate = (sell_price - buy_price) / buy_price if buy_price > 0 else 0
                 stats[days]['profits'].append(profit_rate)
 

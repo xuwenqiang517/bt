@@ -274,3 +274,31 @@ StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [
     ("周期胜率", float),
     ("平均最大回撤", float)
 ])
+
+
+class TradeRecord:
+    """交易记录 - 使用__slots__减少内存占用"""
+    __slots__ = ['date', 'code', 'buy_date', 'buy_price', 'sell_price', 'quantity', 'profit', 'profit_rate', 'reason']
+
+    def __init__(self, date: int, code: int, buy_date: int, buy_price: int, sell_price: int,
+                 quantity: int, profit: int, profit_rate: float, reason: str):
+        self.date = date
+        self.code = code
+        self.buy_date = buy_date
+        self.buy_price = buy_price
+        self.sell_price = sell_price
+        self.quantity = quantity
+        self.profit = profit
+        self.profit_rate = profit_rate
+        self.reason = reason
+
+
+class DailyValue:
+    """每日资产记录 - 使用__slots__减少内存占用"""
+    __slots__ = ['date', 'value', 'free_amount', 'holdings']
+
+    def __init__(self, date: int, value: int, free_amount: int, holdings: list):
+        self.date = date
+        self.value = value
+        self.free_amount = free_amount
+        self.holdings = holdings

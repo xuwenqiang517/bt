@@ -1,13 +1,13 @@
 import logger_config  # 导入日志配置，重定向stdout到log.txt
 import sys
 from stock_calendar import StockCalendar as sc
-from stock_data import StockData as sd
+from stock_data import StockData as sd, DayData
 import polars as pl
 import numpy as np
 from numba import njit
 
 from dto import *
-from dto import ResultSchema
+from dto import ResultSchema, TradeRecord, DailyValue
 
 @njit(cache=True)
 def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
@@ -112,15 +112,16 @@ EMPTY_STRING = ""
 # 进程级选票缓存结构（两级缓存）：
 # 每个进程独立维护自己的缓存，避免多进程序列化开销
 class PickCache:
-    """进程内选股缓存管理器"""
+    """进程内选股缓存管理器 - 简化为一层dict，键为(date, param_key)，值为DayData"""
     __slots__ = ['filter_cache', 'sort_cache', 'current_filter_key', 'current_sort_key']
-    
+
     def __init__(self):
-        self.filter_cache: dict[tuple, dict[int, dict]] = {}
-        self.sort_cache: dict[tuple, dict[int, dict]] = {}
+        # 简化为单层结构：{(date, filter_key): DayData}
+        self.filter_cache: dict[tuple, DayData] = {}
+        self.sort_cache: dict[tuple, DayData] = {}
         self.current_filter_key: tuple = ()
         self.current_sort_key: tuple = ()
-    
+
     def clear(self):
         """清理所有缓存"""
         self.filter_cache.clear()
@@ -192,14 +193,15 @@ class Strategy:
         buy_day5_max = self.buy_param_arr[5] if len(self.buy_param_arr) > 5 else -1
         change_pct_max = self.buy_param_arr[6] if len(self.buy_param_arr) > 6 else 5
 
-        def filter_func(numpy_data: dict):
+        def filter_func(numpy_data):
+            # 使用属性访问替代dict查找
             mask = _filter_numba(
-                numpy_data['consecutive_up_days'],
-                numpy_data['change_3d'],
-                numpy_data['change_5d'],
-                numpy_data['change_pct'],
-                numpy_data['limit_up_count_10d'],
-                numpy_data['volume_ratio'],
+                numpy_data.consecutive_up_days,
+                numpy_data.change_3d,
+                numpy_data.change_5d,
+                numpy_data.change_pct,
+                numpy_data.limit_up_count_10d,
+                numpy_data.volume_ratio,
                 buy_up_day_min, buy_up_day_max, buy_day3_min, buy_day3_max, buy_day5_min, buy_day5_max, change_pct_max
             )
             return mask
@@ -215,10 +217,10 @@ class Strategy:
             """返回排序后的索引数组（输入已是筛选后的数据）"""
             if sort_desc == 1:
                 # 成交量降序（热门股优先）
-                return np.argsort(-filtered_data['volume'])
+                return np.argsort(-filtered_data.volume)
             else:
                 # 成交量升序（冷门股优先），数据已预排序，直接使用
-                return np.arange(len(filtered_data['code']), dtype=np.int64)
+                return np.arange(len(filtered_data.code), dtype=np.int64)
         self._pick_sorter = sorter_func
     
     def bind(self, data: sd, calendar: sc) -> None:
@@ -231,9 +233,9 @@ class Strategy:
         self.free_amount = self.init_amount
         self.hold: list[HoldStock] = []
         self.hold_codes: set[int] = set()
-        self.picked_numpy_data: dict | None = None
-        self.trades_history: list[dict] = []
-        self.daily_values: list[dict] = []
+        self.picked_numpy_data: DayData | None = None
+        self.trades_history: list[TradeRecord] = []
+        self.daily_values: list[DailyValue] = []
         self.today: int | None = None
         # 卖出原因统计
         self.sell_stats = {
@@ -271,35 +273,43 @@ class Strategy:
         """选择符合条件的股票，使用两级缓存优化性能
         第一级：筛选缓存（按买入参数）
         第二级：排序缓存（按买入+选股参数）
+        缓存键格式：(date, param_key)，单层dict结构
         """
         cache = _get_pick_cache()
         today = self.today
         filter_key = self._filter_key
         sort_key = self._sort_key
 
-        # 检查排序缓存（第二级缓存，命中率最高）
-        if today in cache.sort_cache.get(sort_key, {}):
-            self.picked_numpy_data = cache.sort_cache[sort_key][today]
+        # 检查排序缓存（第二级缓存，命中率最高）- 使用扁平化键 (today, sort_key)
+        sort_cache_key = (today, sort_key)
+        if sort_cache_key in cache.sort_cache:
+            self.picked_numpy_data = cache.sort_cache[sort_cache_key]
             if self.debug:
-                count = len(self.picked_numpy_data['code']) if self.picked_numpy_data else 0
+                count = len(self.picked_numpy_data.code) if self.picked_numpy_data else 0
                 print(f"日期 {today} 选出股票 {count} 只 (排序缓存)")
             # 记录选股信号（用于后续统计）- 缓存命中时也需要记录，限制每天最多记录max_hold_count只
-            if self.picked_numpy_data is not None and len(self.picked_numpy_data['code']) > 0:
-                signal_count = min(len(self.picked_numpy_data['code']), self.max_hold_count)
+            if self.picked_numpy_data is not None and len(self.picked_numpy_data.code) > 0:
+                signal_count = min(len(self.picked_numpy_data.code), self.max_hold_count)
                 for i in range(signal_count):
-                    next_open_val = self.picked_numpy_data['next_open'][i]
+                    next_open_val = self.picked_numpy_data.next_open[i]
                     if next_open_val != next_open_val:  # NaN 检查
                         continue
                     self.pick_signals.append({
                         'date': today,
-                        'code': int(self.picked_numpy_data['code'][i]),
+                        'code': int(self.picked_numpy_data.code[i]),
                         'next_open': int(next_open_val)
                     })
             return
 
-        # 检查筛选缓存（第一级缓存）
-        if today in cache.filter_cache.get(filter_key, {}):
-            filtered_data = cache.filter_cache[filter_key][today]
+        # 排序参数变化时清理排序缓存（保留筛选缓存）
+        if sort_key != cache.current_sort_key:
+            cache.sort_cache.clear()
+            cache.current_sort_key = sort_key
+
+        # 检查筛选缓存（第一级缓存）- 使用扁平化键 (today, filter_key)
+        filter_cache_key = (today, filter_key)
+        if filter_cache_key in cache.filter_cache:
+            filtered_data = cache.filter_cache[filter_cache_key]
             if self.debug:
                 print(f"日期 {today} 使用筛选缓存，重新排序")
         else:
@@ -307,15 +317,14 @@ class Strategy:
             if filter_key != cache.current_filter_key:
                 cache.clear()
                 cache.current_filter_key = filter_key
+                cache.current_sort_key = sort_key  # 同时更新排序key，避免重复清理
                 if self.debug:
                     print(f"筛选参数变化，清理所有缓存: {filter_key}")
 
             numpy_data = self.data.get_numpy_data_by_date(today)
-            if numpy_data is None or len(numpy_data['code']) == 0:
+            if numpy_data is None or len(numpy_data.code) == 0:
                 self.picked_numpy_data = None
-                if sort_key not in cache.sort_cache:
-                    cache.sort_cache[sort_key] = {}
-                cache.sort_cache[sort_key][today] = None
+                cache.sort_cache[sort_cache_key] = None
                 if self.debug:
                     print(f"日期 {today} 无符合条件股票")
                 return
@@ -323,68 +332,79 @@ class Strategy:
             mask = self._pick_filter(numpy_data)
             if not mask.any():
                 self.picked_numpy_data = None
-                if sort_key not in cache.sort_cache:
-                    cache.sort_cache[sort_key] = {}
-                cache.sort_cache[sort_key][today] = None
+                cache.sort_cache[sort_cache_key] = None
                 if self.debug:
                     print(f"日期 {today} 无符合条件股票")
                 return
 
             # 保存筛选结果（未排序的原始数据，包含所有可能用于排序的字段）
-            filtered_data = {
-                'code': numpy_data['code'][mask],
-                'next_open': numpy_data['next_open'][mask],
-                'price_limit_status': numpy_data['price_limit_status'][mask],
-                'amount': numpy_data['amount'][mask],
-                'change_pct': numpy_data['change_pct'][mask],
-                'change_3d': numpy_data['change_3d'][mask],
-                'change_5d': numpy_data['change_5d'][mask],
-                'consecutive_up_days': numpy_data['consecutive_up_days'][mask],
-                'volume': numpy_data['volume'][mask],
-                'close': numpy_data['close'][mask],
-                'open': numpy_data['open'][mask],
-                'high': numpy_data['high'][mask],
-                'low': numpy_data['low'][mask],
-            }
+            # 使用DayData替代dict，保持一致性并提升访问速度
+            filtered_data = DayData(
+                code=numpy_data.code[mask],
+                open_=numpy_data.open[mask],
+                close=numpy_data.close[mask],
+                high=numpy_data.high[mask],
+                low=numpy_data.low[mask],
+                volume=numpy_data.volume[mask],
+                next_open=numpy_data.next_open[mask],
+                price_limit_status=numpy_data.price_limit_status[mask],
+                consecutive_up_days=numpy_data.consecutive_up_days[mask],
+                change_3d=numpy_data.change_3d[mask],
+                change_5d=numpy_data.change_5d[mask],
+                change_pct=numpy_data.change_pct[mask],
+                limit_up_count_10d=numpy_data.limit_up_count_10d[mask],
+                volume_ratio=numpy_data.volume_ratio[mask],
+                amount=numpy_data.amount[mask],
+                code_to_idx=None  # 缓存数据不需要反向查找
+            )
 
-            # 存入筛选缓存
-            if filter_key not in cache.filter_cache:
-                cache.filter_cache[filter_key] = {}
-            cache.filter_cache[filter_key][today] = filtered_data
+            # 存入筛选缓存 - 使用扁平化键
+            cache.filter_cache[filter_cache_key] = filtered_data
 
         # 使用排序器对筛选结果排序
         sorted_indices = self._pick_sorter(filtered_data)
 
-        self.picked_numpy_data = {
-            'code': filtered_data['code'][sorted_indices],
-            'next_open': filtered_data['next_open'][sorted_indices],
-            'price_limit_status': filtered_data['price_limit_status'][sorted_indices],
-        }
+        # 使用DayData替代dict
+        self.picked_numpy_data = DayData(
+            code=filtered_data.code[sorted_indices],
+            open_=None,  # 排序后只需要这三个字段
+            close=None,
+            high=None,
+            low=None,
+            volume=None,
+            next_open=filtered_data.next_open[sorted_indices],
+            price_limit_status=filtered_data.price_limit_status[sorted_indices],
+            consecutive_up_days=None,
+            change_3d=None,
+            change_5d=None,
+            change_pct=None,
+            limit_up_count_10d=None,
+            volume_ratio=None,
+            amount=None,
+            code_to_idx=None
+        )
 
-        # 存入排序缓存
-        if sort_key not in cache.sort_cache:
-            cache.sort_cache[sort_key] = {}
-        cache.sort_cache[sort_key][today] = self.picked_numpy_data
-        cache.current_sort_key = sort_key
+        # 存入排序缓存 - 使用扁平化键
+        cache.sort_cache[sort_cache_key] = self.picked_numpy_data
 
         if self.debug:
-            codes_list = list(self.picked_numpy_data['code'])
+            codes_list = list(self.picked_numpy_data.code)
             codes_str = ','.join([str(c) for c in codes_list[:5]])
             if len(codes_list) > 5:
                 codes_str += f",...({len(codes_list)-5} more)"
             print(f"日期 {today} 选出股票 {len(codes_list)} 只: {codes_str}")
 
         # 记录选股信号（用于后续统计）- 限制每天最多记录max_hold_count只（排序后的前N只）
-        if self.picked_numpy_data is not None and len(self.picked_numpy_data['code']) > 0:
-            signal_count = min(len(self.picked_numpy_data['code']), self.max_hold_count)
+        if self.picked_numpy_data is not None and len(self.picked_numpy_data.code) > 0:
+            signal_count = min(len(self.picked_numpy_data.code), self.max_hold_count)
             for i in range(signal_count):
-                next_open_val = self.picked_numpy_data['next_open'][i]
+                next_open_val = self.picked_numpy_data.next_open[i]
                 # 跳过 NaN 值
                 if next_open_val != next_open_val:  # NaN 检查
                     continue
                 self.pick_signals.append({
                     'date': today,
-                    'code': int(self.picked_numpy_data['code'][i]),
+                    'code': int(self.picked_numpy_data.code[i]),
                     'next_open': int(next_open_val)
                 })
     
@@ -392,7 +412,7 @@ class Strategy:
     def buy(self) -> None:
         """执行买入操作 - 优化仓位分配"""
         numpy_data = self.picked_numpy_data
-        if numpy_data is None or len(numpy_data['code']) == 0:
+        if numpy_data is None or len(numpy_data.code) == 0:
             return
 
         hold = self.hold
@@ -406,10 +426,10 @@ class Strategy:
         free_amount = self.free_amount
         today = self.today
 
-        # 直接使用 NumPy 数组
-        codes = numpy_data['code']
-        next_opens = numpy_data['next_open']
-        price_limit_status = numpy_data['price_limit_status']
+        # 直接使用 NumPy 数组（使用属性访问替代dict查找）
+        codes = numpy_data.code
+        next_opens = numpy_data.next_open
+        price_limit_status = numpy_data.price_limit_status
         hold_codes_arr = np.array(list(hold_codes), dtype=codes.dtype) if hold_codes else np.array([], dtype=codes.dtype)
 
         # 计算买入金额 - 基于剩余资金和剩余持仓数动态分配
@@ -494,12 +514,12 @@ class Strategy:
                     print(f"日期 {today} 股票 {code_display} 无数据,跳过卖出")
                 continue
 
-            # 按需从numpy数组取值
-            open_price = day_data['open'][idx]
-            close_price = day_data['close'][idx]
-            high_price = day_data['high'][idx]
-            low_price = day_data['low'][idx]
-            price_limit_status = day_data['price_limit_status'][idx]
+            # 按需从numpy数组取值（使用属性访问替代dict查找）
+            open_price = day_data.open[idx]
+            close_price = day_data.close[idx]
+            high_price = day_data.high[idx]
+            low_price = day_data.low[idx]
+            price_limit_status = day_data.price_limit_status[idx]
 
             if price_limit_status == 2:
                 if is_debug:
@@ -551,18 +571,18 @@ class Strategy:
                 if stat_reason in self.sell_stats:
                     self.sell_stats[stat_reason] += 1
 
-                # 记录交易历史
-                trades_history.append({
-                    'date': today,
-                    'code': code,
-                    'buy_date': hold_stock.buy_day,
-                    'buy_price': buy_price,
-                    'sell_price': sell_price,
-                    'quantity': buy_count,
-                    'profit': profit_cents,
-                    'profit_rate': profit_rate,
-                    'reason': log_reason
-                })
+                # 记录交易历史 - 使用TradeRecord替代dict，减少内存占用
+                trades_history.append(TradeRecord(
+                    date=today,
+                    code=code,
+                    buy_date=hold_stock.buy_day,
+                    buy_price=buy_price,
+                    sell_price=sell_price,
+                    quantity=buy_count,
+                    profit=profit_cents,
+                    profit_rate=profit_rate,
+                    reason=log_reason
+                ))
 
                 if is_debug:
                     free_amount = self.free_amount / 100
@@ -662,9 +682,9 @@ class Strategy:
                     print(f"日期 {today} 持有 {code} 日期:{today} 无数据")
                 continue
 
-            # 按需从numpy数组取值
-            close_price = day_data['close'][idx]
-            high_price = day_data['high'][idx]
+            # 按需从numpy数组取值（使用属性访问替代dict查找）
+            close_price = day_data.close[idx]
+            high_price = day_data.high[idx]
             buy_price = hold_stock.buy_price
             buy_count = hold_stock.buy_count
 
@@ -704,13 +724,13 @@ class Strategy:
         free_amount = self.free_amount
         total_value = hold_amount + free_amount
 
-        # 记录每日资产和持仓明细
-        self.daily_values.append({
-            'date': today,
-            'value': total_value,
-            'free_amount': free_amount,
-            'holdings': daily_holdings
-        })
+        # 记录每日资产和持仓明细 - 使用DailyValue替代dict，减少内存占用
+        self.daily_values.append(DailyValue(
+            date=today,
+            value=total_value,
+            free_amount=free_amount,
+            holdings=daily_holdings
+        ))
 
         if is_debug:
             free_amount_元 = free_amount / 100
@@ -751,8 +771,8 @@ class Strategy:
                 if idx == -1:
                     final_holdings_value += hold_stock.buy_price * hold_stock.buy_count
                 else:
-                    # 从numpy数组取close价格
-                    close_price = day_data['close'][idx]
+                    # 从numpy数组取close价格（使用属性访问替代dict查找）
+                    close_price = day_data.close[idx]
                     final_holdings_value += close_price * hold_stock.buy_count
 
         free_amount = self.free_amount
@@ -762,18 +782,18 @@ class Strategy:
 
         # 计算胜率
         trade_count = len(trades_history)
-        win_rate = sum(1 for t in trades_history if t['profit'] > 0) / trade_count if trade_count > 0 else 0
+        win_rate = sum(1 for t in trades_history if t.profit > 0) / trade_count if trade_count > 0 else 0
 
         # 计算资金使用率
         avg_utilization = 0
         if daily_values:
-            utilizations = [min(max(0, dv['value'] - dv['free_amount']) / dv['value'], 1.0)
-                           for dv in daily_values if dv['value'] > 0]
+            utilizations = [min(max(0, dv.value - dv.free_amount) / dv.value, 1.0)
+                           for dv in daily_values if dv.value > 0]
             avg_utilization = sum(utilizations) / len(utilizations) if utilizations else 0
 
         # 计算最大资金和最小资金
         if daily_values:
-            values = [dv['value'] for dv in daily_values]
+            values = [dv.value for dv in daily_values]
             max_value = max(values)
             min_value = min(values)
         else:
@@ -782,8 +802,8 @@ class Strategy:
         # 计算夏普比率（仅年周期需要）
         sharpe_ratio = 0.0
         if calc_sharpe and len(daily_values) > 1:
-            daily_returns = [(daily_values[i]['value'] - daily_values[i-1]['value']) / daily_values[i-1]['value']
-                            for i in range(1, len(daily_values)) if daily_values[i-1]['value'] > 0]
+            daily_returns = [(daily_values[i].value - daily_values[i-1].value) / daily_values[i-1].value
+                            for i in range(1, len(daily_values)) if daily_values[i-1].value > 0]
             if daily_returns:
                 avg_return = sum(daily_returns) / len(daily_returns)
                 std = (sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5
