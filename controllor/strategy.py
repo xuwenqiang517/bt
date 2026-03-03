@@ -8,9 +8,6 @@ from numba import njit
 from dto import *
 from dto import ResultSchema
 
-# 导入日志配置
-import logger_config
-
 @njit(cache=True)
 def _filter_numba(up_days, change_3d, change_5d, change_pct, limit_up_count_10d, volume_ratio,
                   buy_up_day_min, buy_up_day_max, buy_day3_min, buy_day3_max, buy_day5_min, buy_day5_max, change_pct_max):
@@ -81,8 +78,8 @@ def _calc_buy_counts_numba(codes, next_opens, price_limit_status, hold_codes_arr
 
 
 @njit(cache=True)
-def _check_sell_numba(buy_price, highest_price, hold_days,
-                      open_price, close_price, high_price, low_price,
+def _check_sell_numba(highest_price, hold_days,
+                      open_price, low_price,
                       stop_loss_price, target_return_price, trailing_stop_price,
                       hold_days_limit):
     """Numba JIT 编译的卖出检查函数
@@ -101,7 +98,7 @@ def _check_sell_numba(buy_price, highest_price, hold_days,
             return True, open_price
         if low_price <= trailing_stop_price:
             return True, trailing_stop_price
-    
+
     # 阶段2：持仓到期且未达到目标，强制卖出
     if hold_days >= hold_days_limit:
         return True, open_price
@@ -143,7 +140,6 @@ def _get_pick_cache() -> PickCache:
 pl.Config.set_tbl_cols(-1)          # -1 表示显示所有列（默认是有限数量）
 
 class Strategy:
-    
     def __init__(self, base_param_arr: list, sell_param_arr: list, buy_param_arr: list, pick_param_arr: list, debug: bool):
         """初始化策略
 
@@ -592,8 +588,8 @@ class Strategy:
 
         # 使用Numba进行核心计算
         need_sell, sell_price = _check_sell_numba(
-            buy_price, highest_price, hold_days,
-            open_price, close_price, high_price, low_price,
+            highest_price, hold_days,
+            open_price, low_price,
             stop_loss_price, target_return_price, trailing_stop_price,
             self._hold_days_limit
         )
@@ -717,8 +713,13 @@ class Strategy:
         """更新当前日期"""
         self.today = today
 
-    def calculate_performance(self, start_date: int, end_date: int) -> BacktestResult:
-        """计算并返回策略性能指标"""
+    def calculate_performance(self, start_date: int, end_date: int, calc_sharpe: bool = False) -> BacktestResult:
+        """计算并返回策略性能指标
+        Args:
+            start_date: 起始日期
+            end_date: 结束日期
+            calc_sharpe: 是否计算夏普比率（仅年周期需要）
+        """
         init_amount = self.init_amount
         trades_history = self.trades_history
         hold = self.hold
@@ -765,9 +766,9 @@ class Strategy:
         else:
             max_value = min_value = init_amount
 
-        # 计算夏普比率
-        sharpe_ratio = 0
-        if len(daily_values) > 1:
+        # 计算夏普比率（仅年周期需要）
+        sharpe_ratio = 0.0
+        if calc_sharpe and len(daily_values) > 1:
             daily_returns = [(daily_values[i]['value'] - daily_values[i-1]['value']) / daily_values[i-1]['value']
                             for i in range(1, len(daily_values)) if daily_values[i-1]['value'] > 0]
             if daily_returns:
@@ -780,8 +781,8 @@ class Strategy:
         sell_stats = getattr(self, 'sell_stats', {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0})
 
         result_dict = ResultSchema.create_backtest_result(
-            起始日期=str(start_date),
-            结束日期=str(end_date),
+            起始日期=start_date,
+            结束日期=end_date,
             初始资金=init_amount,
             最终资金=final_total_value,
             总收益=total_return,
@@ -790,8 +791,9 @@ class Strategy:
             交易次数=trade_count,
             最大资金=max_value,
             最小资金=min_value,
-            夏普比率=sharpe_ratio,
             平均资金使用率=avg_utilization,
             卖出统计=sell_stats
         )
+        # 手动添加夏普比率（不在BASE_FIELDS中）
+        result_dict['夏普比率'] = sharpe_ratio
         return BacktestResult(**result_dict)

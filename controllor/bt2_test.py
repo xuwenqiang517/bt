@@ -64,7 +64,7 @@ def str2dict(strategy_params: str) -> list:
 
 if __name__ == "__main__":
 
-    bt_all(processor_count=4, fail_count=1, max_strategy_count=10000000000)
+    bt_all(processor_count=1, fail_count=20, max_strategy_count=500)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)
     # bt_one(s,sc().get_date_arr())
     # bt_one(s,[[20250101,20250201]])

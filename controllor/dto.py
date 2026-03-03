@@ -8,8 +8,8 @@ class ResultSchema:
 
     # 基础字段定义: (名称, 类型, 默认值)
     BASE_FIELDS = [
-        ("起始日期", str, ""),
-        ("结束日期", str, ""),
+        ("起始日期", int, 0),
+        ("结束日期", int, 0),
         ("初始资金", float, 0.0),
         ("最终资金", float, 0.0),
         ("总收益", float, 0.0),
@@ -18,7 +18,6 @@ class ResultSchema:
         ("交易次数", int, 0),
         ("最大资金", float, 0.0),
         ("最小资金", float, 0.0),
-        ("夏普比率", float, 0.0),
         ("平均资金使用率", float, 0.0),
         ("卖出统计", dict, lambda: {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0}),
     ]
@@ -34,7 +33,6 @@ class ResultSchema:
         ("平均资金使用率", str, ""),
         ("最大资金", float, 0.0),
         ("最小资金", float, 0.0),
-        ("夏普比率", float, 0.0),
         ("年周期夏普", float, 0.0),
         ("年最大资金", float, 0.0),
         ("年最小资金", float, 0.0),
@@ -76,8 +74,8 @@ class ResultSchema:
     def create_empty_backtest_result(cls, start_date: int, end_date: int, init_amount: float) -> Dict[str, Any]:
         """创建空的回测结果字典"""
         return {
-            "起始日期": str(start_date),
-            "结束日期": str(end_date),
+            "起始日期": start_date,
+            "结束日期": end_date,
             "初始资金": init_amount,
             "最终资金": init_amount,
             "总收益": 0.0,
@@ -86,9 +84,9 @@ class ResultSchema:
             "交易次数": 0,
             "最大资金": init_amount,
             "最小资金": init_amount,
-            "夏普比率": 0.0,
             "平均资金使用率": 0.0,
-            "卖出统计": {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0}
+            "卖出统计": {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0},
+            "夏普比率": 0.0
         }
 
     @classmethod
@@ -131,7 +129,6 @@ class ResultSchema:
             "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
             "最大资金": float(max([x.最大资金 for x in results])),
             "最小资金": float(min([x.最小资金 for x in results])),
-            "夏普比率": round(float(np.mean([x.夏普比率 for x in results])), 2),
             "配置": cache_key
         }
 
@@ -240,8 +237,8 @@ TrailingStopProfitParams=NamedTuple("TrailingStopProfitParams", [
 ])
 
 BacktestResult=NamedTuple("BacktestResult", [
-    ("起始日期", str),
-    ("结束日期", str),
+    ("起始日期", int),
+    ("结束日期", int),
     ("初始资金", float),
     ("最终资金", float),
     ("总收益", float),
@@ -250,9 +247,9 @@ BacktestResult=NamedTuple("BacktestResult", [
     ("交易次数", int),
     ("最大资金", float),
     ("最小资金", float),
-    ("夏普比率", float),
     ("平均资金使用率", float),
-    ("卖出统计", dict)  # 卖出原因统计：止损、到期盈利、到期亏损、回落止盈
+    ("卖出统计", dict),  # 卖出原因统计：止损、到期盈利、到期亏损、回落止盈
+    ("夏普比率", float)  # 仅年周期计算
 ])
 
 StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [

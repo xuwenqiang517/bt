@@ -98,19 +98,16 @@ class StockData:
         self.date_numpy_dict = {}
         grouped = stock_data_df.group_by("date")
 
-        # 打印20250701这天的股票数量
-        print("\n📊 20250701股票数量统计:")
-        print("-" * 40)
-        target_date = 20250701
-        group = stock_data_df.filter(pl.col("date") == target_date)
-        count = len(group)
-        print(f"  {target_date}: {count:4d} 只股票")
-        print("-" * 40)
+        # 检查20240701数据是否充足（不足1000只时告警）
+        target_date = 20240701
+        group_20240701 = stock_data_df.filter(pl.col("date") == target_date)
+        count_20240701 = len(group_20240701)
+        if count_20240701 < 1000:
+            print(f"\n⚠️ 警告: {target_date} 股票数量不足 ({count_20240701} < 1000)，请检查数据完整性！\n")
         
         # 打印数据范围信息
         all_dates = sorted([d[0] if isinstance(d, tuple) else d for d, _ in grouped])
-        print(f"  数据范围: {all_dates[0]} 至 {all_dates[-1]}")
-        print(f"  总交易日: {len(all_dates)} 天\n")
+        print(f"\n📊 数据范围: {all_dates[0]} 至 {all_dates[-1]}, 共 {len(all_dates)} 个交易日\n")
 
         for trade_date, group in grouped:
             if isinstance(trade_date, tuple):

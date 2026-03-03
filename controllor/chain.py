@@ -13,9 +13,6 @@ from dto import *
 from dto import ResultSchema
 from strategy import Strategy
 
-# 导入日志配置
-import logger_config
-
 class Chain:
     def __init__(self, param=None):
         self.strategies = param.get("strategy")  # 策略列表（可能为None，使用生成器模式）
@@ -124,34 +121,8 @@ class Chain:
         values = [dv['value'] / 100 for dv in daily_values]
         date_to_idx = {dv['date']: i for i, dv in enumerate(daily_values)}
 
-        # 调试：打印1117-1119期间的数据
-        if self.chain_debug:
-            print("\n=== 调试：daily_values 数据 ===")
-            for dv in daily_values:
-                d = dv['date']
-                if 20251115 <= d <= 20251122:
-                    holdings = dv.get('holdings', [])
-                    hold_info = ', '.join([f"{h['code']}({h['profit_rate']:.2%})" for h in holdings]) if holdings else '空仓'
-                    print(f"日期 {d}: 总资产 {dv['value']/100:.2f}, 持仓: {hold_info}")
-
         # 创建数值索引用于画图（避免字符串日期导致的分类轴问题）
         x_indices = list(range(len(dates)))
-        idx_to_date = {i: dates[i] for i in range(len(dates))}
-
-        # 收集每只股票的持仓期间盈亏率
-        stock_holdings = {}
-        for dv in daily_values:
-            date = dv['date']
-            if date not in date_to_idx:
-                continue
-            date_idx = date_to_idx[date]
-            holdings = dv.get('holdings', [])
-            for h in holdings:
-                code = h['code']
-                profit_rate = h['profit_rate'] * 100
-                if code not in stock_holdings:
-                    stock_holdings[code] = []
-                stock_holdings[code].append((date_idx, profit_rate))
 
         # 设置中文字体
         plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'WenQuanYi Micro Hei']
@@ -448,7 +419,7 @@ class Chain:
             pick_signal_stats = None
             if self.run_year:
                 try:
-                    year_result = self.execute_one_strategy(strategy, 20250101, 20260301, stock_data, calendar)
+                    year_result = self.execute_one_strategy(strategy, 20250101, 20260301, stock_data, calendar, calc_sharpe=True)
                     # 年周期回测后，统计选股信号表现
                     if hasattr(strategy, 'pick_signals') and strategy.pick_signals:
                         pick_signal_stats = self._calc_pick_signal_stats(
@@ -772,16 +743,24 @@ class Chain:
         return
 
 
-    def execute_one_strategy(self, strategy, start_date, end_date, stock_data, calendar) -> BacktestResult:
-        """执行单个策略"""
+    def execute_one_strategy(self, strategy, start_date, end_date, stock_data, calendar, calc_sharpe: bool = False) -> BacktestResult:
+        """执行单个策略
+        Args:
+            strategy: 策略实例
+            start_date: 起始日期
+            end_date: 结束日期
+            stock_data: 股票数据
+            calendar: 交易日历
+            calc_sharpe: 是否计算夏普比率（仅年周期需要）
+        """
         scalendar = calendar
         current_idx = scalendar.start(start_date)
         end_idx = scalendar.start(end_date)
-        
+
         # 日期不符合直接抛异常
         if current_idx == -1 or end_idx == -1:
             raise ValueError(f"Invalid date range: {start_date} to {end_date}")
-        
+
         strategy.bind(stock_data, calendar)
         strategy.reset()
 
@@ -794,8 +773,8 @@ class Chain:
             strategy.pick()
             strategy.settle_amount()
             current_idx = scalendar.next(current_idx)
-        
-        result = strategy.calculate_performance(start_date, end_date)
+
+        result = strategy.calculate_performance(start_date, end_date, calc_sharpe)
 
         if self.chain_debug:
             print("=" * 50)
@@ -936,7 +915,7 @@ class Chain:
             pick_signal_stats = None
             if self.run_year:
                 try:
-                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar, calc_sharpe=True)
                     # 年周期回测后，统计选股信号表现
                     if hasattr(strategy, 'pick_signals') and strategy.pick_signals:
                         pick_signal_stats = self._calc_pick_signal_stats(
