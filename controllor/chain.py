@@ -739,9 +739,8 @@ class Chain:
         
         # 所有策略执行完成后，合并所有进程的缓存
         self._merge_thread_caches()
-        
-        return
 
+        return
 
     def execute_one_strategy(self, strategy, start_date, end_date, stock_data, calendar, calc_sharpe: bool = False) -> BacktestResult:
         """执行单个策略
