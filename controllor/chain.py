@@ -89,9 +89,9 @@ class Chain:
         for idx in range(start_idx, end_idx + 1):
             date = calendar.get_date(idx)
             day_data = stock_data.get_numpy_data_by_date(date)
-            if day_data is not None and len(day_data['code']) > 0:
+            if day_data is not None and len(day_data.code) > 0:
                 # 使用当日平均涨跌幅
-                avg_change = np.mean(day_data['change_pct'])
+                avg_change = np.mean(day_data.change_pct)
                 total_return += avg_change
                 count += 1
 
@@ -420,6 +420,8 @@ class Chain:
         for params in tqdm(strategy_group, desc=f"进程 {thread_id} 执行策略",
                           total=len(strategy_group), position=thread_id, leave=True, mininterval=1):
             count += 1
+            # 周期回测不需要记录选股信号
+            params['record_pick_signals'] = False
             strategy = Strategy(**params)
             results = []
             failure_count = 0
@@ -448,6 +450,8 @@ class Chain:
             pick_signal_stats = None
             if self.run_year:
                 try:
+                    # 年周期回测需要记录选股信号
+                    strategy._record_pick_signals = True
                     year_result = self.execute_one_strategy(strategy, 20250101, 20260301, stock_data, calendar)
                     # 年周期回测后，统计选股信号表现
                     if hasattr(strategy, 'pick_signals') and strategy.pick_signals:
@@ -571,37 +575,32 @@ class Chain:
             if current_idx == -1:
                 continue
 
-            next_idx = calendar.next(current_idx)
-            if next_idx == -1:
+            next_idx = current_idx + 1
+            if next_idx >= len(calendar.df):
                 continue
 
             # 获取次日的开盘价（买入价）
             buy_date = calendar.get_date(next_idx)
-            buy_data = stock_data.get_data_by_date_code(buy_date, code)
-            if buy_data is None:
+            buy_data = stock_data.get_full_data_by_date_code(buy_date, code)
+            if buy_data.close == 0:  # 空数据检查
                 continue
-            buy_price = buy_data['open']
+            buy_price = buy_data.open
 
             # 获取未来1/3/5个交易日的收盘价
             for days in [1, 3, 5]:
                 # 找到N个交易日后的日期（从次日开始算）
-                target_idx = next_idx
-                for _ in range(days - 1):  # 已经在次日，所以只需要再移动days-1天
-                    target_idx = calendar.next(target_idx)
-                    if target_idx == -1:
-                        break
-
-                if target_idx == -1:
+                target_idx = next_idx + days - 1  # 已经在次日，所以只需要再加days-1
+                if target_idx >= len(calendar.df):
                     continue
 
                 sell_date = calendar.get_date(target_idx)
 
                 # 获取卖出日期的收盘价
-                sell_data = stock_data.get_data_by_date_code(sell_date, code)
-                if sell_data is None:
+                sell_data = stock_data.get_full_data_by_date_code(sell_date, code)
+                if sell_data.close == 0:  # 空数据检查
                     continue
 
-                sell_price = sell_data['close']
+                sell_price = sell_data.close
                 profit_rate = (sell_price - buy_price) / buy_price if buy_price > 0 else 0
                 stats[days]['profits'].append(profit_rate)
 
@@ -912,6 +911,8 @@ class Chain:
         for params in tqdm(self.param_generator.get_slice_params(start_idx, end_idx),
                           desc=f"进程 {thread_id} 执行策略", total=param_count, position=thread_id, leave=True, mininterval=1):
             count += 1
+            # 周期回测不需要记录选股信号
+            params['record_pick_signals'] = False
             strategy = Strategy(**params)
             results = []
             failure_count = 0
@@ -944,6 +945,8 @@ class Chain:
             pick_signal_stats = None
             if self.run_year:
                 try:
+                    # 年周期回测需要记录选股信号
+                    strategy._record_pick_signals = True
                     year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar, calc_sharpe=True)
                     # 年周期回测后，统计选股信号表现
                     if hasattr(strategy, 'pick_signals') and strategy.pick_signals:

@@ -76,16 +76,16 @@ class ResultSchema:
     def create_empty_backtest_result(cls, start_date: int, end_date: int, init_amount: float) -> Dict[str, Any]:
         """创建空的回测结果字典"""
         return {
-            "起始日期": str(start_date),
-            "结束日期": str(end_date),
+            "起始日期": start_date,
+            "结束日期": end_date,
             "初始资金": init_amount,
             "最终资金": init_amount,
             "总收益": 0.0,
             "总收益率": 0.0,
             "胜率": 0.0,
             "交易次数": 0,
-            "最大资金": init_amount,
-            "最小资金": init_amount,
+            "期max": init_amount,
+            "期min": init_amount,
             "夏普比率": 0.0,
             "平均资金使用率": 0.0,
             "卖出统计": {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0}

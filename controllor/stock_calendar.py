@@ -71,18 +71,6 @@ class StockCalendar:
 
         return -1
 
-    def next(self, current_idx: int = None) -> int:
-        """
-        获取下一个交易日索引
-        """
-        if current_idx is None:
-            current_idx = self.start_index
-        if current_idx < len(self.df) - 1:
-            next_idx = current_idx + 1
-            self.start_index = next_idx
-            return next_idx
-        return -1
-
     def gap(self, start: int, end: int) -> int:
         """
         计算 start 到 end 之间的交易日数量，使用预计算的日期范围快速判断
@@ -197,39 +185,36 @@ if __name__ == "__main__":
     index=sc.next(index)
     date=sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    index=sc.next(index)
-    date=sc.get_date(index)
+    index += 1
+    date = sc.get_date(index)
     print(date)
-    # for _ in range(10):
-    #     date=sc.next()
-    #     print(date)
     
 
 

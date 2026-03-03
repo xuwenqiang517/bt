@@ -11,6 +11,48 @@ pl.Config.set_tbl_cols(100)
 # pl 显示所有列
 pl.Config.set_tbl_rows(10)
 
+
+class PickData:
+    """选股专用数据结构 - 已过滤（量比>1且10天内无涨停且次日开盘不涨停），字段精简"""
+    __slots__ = ['code', 'open', 'close', 'high', 'low', 'volume', 'next_open',
+                 'consecutive_up_days', 'change_3d', 'change_5d', 'change_pct']
+
+    def __init__(self, code=None, open_=None, close=None, high=None, low=None, volume=None, next_open=None,
+                 consecutive_up_days=None, change_3d=None, change_5d=None, change_pct=None):
+        self.code = code
+        self.open = open_
+        self.close = close
+        self.high = high
+        self.low = low
+        self.volume = volume
+        self.next_open = next_open
+        self.consecutive_up_days = consecutive_up_days
+        self.change_3d = change_3d
+        self.change_5d = change_5d
+        self.change_pct = change_pct
+
+
+class FullData:
+    """完整数据结构 - 包含所有股票，用于持仓/卖出逻辑，O(1)查询优化
+    只保留持仓/卖出需要的字段，选股字段在PickData中
+    """
+    __slots__ = ['open', 'close', 'high', 'low', 'next_open', 'price_limit_status']
+
+    def __init__(self, open_=0, close=0, high=0, low=0, next_open=0, price_limit_status=0):
+        self.open = open_
+        self.close = close
+        self.high = high
+        self.low = low
+        self.next_open = next_open
+        self.price_limit_status = price_limit_status
+
+
+# 空PickData对象，用于无数据时返回，避免重复创建
+_EMPTY_PICK_DATA = PickData(code=np.array([], dtype=np.int32))
+# 空FullData对象
+_EMPTY_FULL_DATA = FullData()
+
+
 class StockData:
 
     def __init__(self, force_refresh=False):
@@ -93,9 +135,12 @@ class StockData:
         return df_tech
 
     def convert(self, stock_data_df) -> dict[int, pl.DataFrame]:
-        # 按日期构建索引，统一为2层NumPy结构
-        date_dict = {}
-        self.date_numpy_dict = {}
+        """构建两层数据结构：
+        1. pick_data_dict: 已过滤的选股数据（量比>1且10天内无涨停），按日期分组，用于选股
+        2. full_data_dict: O(1)查询结构，key=日期*1000000+代码，用于持仓/卖出逻辑
+        """
+        self.pick_data_dict: dict[int, PickData] = {}  # 选股专用：已过滤，按日期分组
+        self.full_data_dict: dict[int, FullData] = {}  # 完整数据：O(1)查询，key=date*1000000+code
         grouped = stock_data_df.group_by("date")
 
         # 打印20250701这天的股票数量
@@ -106,7 +151,7 @@ class StockData:
         count = len(group)
         print(f"  {target_date}: {count:4d} 只股票")
         print("-" * 40)
-        
+
         # 打印数据范围信息
         all_dates = sorted([d[0] if isinstance(d, tuple) else d for d, _ in grouped])
         print(f"  数据范围: {all_dates[0]} 至 {all_dates[-1]}")
@@ -118,49 +163,85 @@ class StockData:
             if group is None or group.is_empty():
                 continue
             group = group.sort("volume", descending=False)  # 按成交量升序排列（选冷门股）
-            date_dict[trade_date] = group
 
-            # 统一数据结构：NumPy数组 + code到索引的映射
+            # 提取numpy数组
             codes = group['code'].to_numpy()
-            self.date_numpy_dict[trade_date] = {
-                'code': codes,
-                'open': group['open'].to_numpy(),
-                'close': group['close'].to_numpy(),
-                'high': group['high'].to_numpy(),
-                'low': group['low'].to_numpy(),
-                'volume': group['volume'].to_numpy(),
-                'next_open': group['next_open'].to_numpy(),
-                'price_limit_status': group['price_limit_status'].to_numpy(),
-                'consecutive_up_days': group['consecutive_up_days'].to_numpy(),
-                'change_3d': group['change_3d'].to_numpy(),
-                'change_5d': group['change_5d'].to_numpy(),
-                'change_pct': group['change_pct'].to_numpy(),
-                'limit_up_count_10d': group['limit_up_count_10d'].to_numpy(),
-                'volume_ratio': group['volume_ratio'].to_numpy(),
-                'amount': group['amount'].to_numpy(),
-                '_code_to_idx': {int(code): idx for idx, code in enumerate(codes)}
-            }
-        return date_dict
+            opens = group['open'].to_numpy()
+            closes = group['close'].to_numpy()
+            highs = group['high'].to_numpy()
+            lows = group['low'].to_numpy()
+            volumes = group['volume'].to_numpy()
+            next_opens = group['next_open'].to_numpy()
+            price_limit_status = group['price_limit_status'].to_numpy()
+            consecutive_up_days = group['consecutive_up_days'].to_numpy()
+            change_3d = group['change_3d'].to_numpy()
+            change_5d = group['change_5d'].to_numpy()
+            change_pct = group['change_pct'].to_numpy()
+            limit_up_count_10d = group['limit_up_count_10d'].to_numpy()
+            volume_ratio = group['volume_ratio'].to_numpy()
 
-    def get_numpy_data_by_date(self, today: int) -> dict:
+            # 构建第一层：完整数据O(1)查询结构（只保留持仓/卖出需要的字段）
+            base_key = trade_date * 1000000
+            for i in range(len(codes)):
+                key = base_key + int(codes[i])
+                self.full_data_dict[key] = FullData(
+                    open_=opens[i],
+                    close=closes[i],
+                    high=highs[i],
+                    low=lows[i],
+                    next_open=next_opens[i],
+                    price_limit_status=price_limit_status[i]
+                )
+
+            # 构建第二层：选股专用数据（前置过滤：量比>1且10天内无涨停且次日开盘不涨停）
+            # 量比>1 且 10天内无涨停(limit_up_count_10d == 0) 且 次日开盘不涨停(next_open != close * 1.1)
+            # 次日开盘涨停可以通过 next_open 和 close 计算得出，属于T日已知数据
+            next_open_limit_up = (next_opens / closes - 1) >= 0.099  # 考虑浮点误差
+            mask = (volume_ratio > 1.0) & (limit_up_count_10d == 0) & (~next_open_limit_up)
+            filtered_indices = np.where(mask)[0]
+
+            if len(filtered_indices) > 0:
+                self.pick_data_dict[trade_date] = PickData(
+                    code=codes[filtered_indices],
+                    open_=opens[filtered_indices],
+                    close=closes[filtered_indices],
+                    high=highs[filtered_indices],
+                    low=lows[filtered_indices],
+                    volume=volumes[filtered_indices],
+                    next_open=next_opens[filtered_indices],
+                    consecutive_up_days=consecutive_up_days[filtered_indices],
+                    change_3d=change_3d[filtered_indices],
+                    change_5d=change_5d[filtered_indices],
+                    change_pct=change_pct[filtered_indices]
+                )
+            else:
+                # 没有符合条件的股票，创建空对象
+                self.pick_data_dict[trade_date] = PickData(code=np.array([], dtype=np.int32))
+
+        return {}
+
+    def get_pick_data_by_date(self, today: int) -> PickData:
+        """获取当天已过滤的选股数据（量比>1且10天内无涨停）
+        用于选股逻辑，数据已前置过滤，减少计算量
+        """
+        return self.pick_data_dict.get(today, _EMPTY_PICK_DATA)
+
+    def get_full_data_by_date_code(self, today: int, code: int) -> FullData:
+        """精确查询某只股票的完整数据，O(1)复杂度
+        用于持仓/卖出逻辑，数据完整，包含所有字段
+        key = 日期*1000000 + 股票代码，单次dict查询
+        """
+        key = today * 1000000 + code
+        return self.full_data_dict.get(key, _EMPTY_FULL_DATA)
+
+    def get_numpy_data_by_date(self, today: int) -> PickData:
         """获取当天所有股票的NumPy数据（用于批量筛选）"""
-        return self.date_numpy_dict.get(today)
+        return self.pick_data_dict.get(today, _EMPTY_PICK_DATA)
 
-    def get_data_by_date_code(self, today: int, code: int) -> dict | None:
+    def get_data_by_date_code(self, today: int, code: int) -> FullData:
         """精确查询某只股票的数据，O(1)复杂度"""
-        day_data = self.date_numpy_dict.get(today)
-        if day_data is None:
-            return None
-        idx = day_data['_code_to_idx'].get(code)
-        if idx is None:
-            return None
-        return {
-            'open': day_data['open'][idx],
-            'close': day_data['close'][idx],
-            'high': day_data['high'][idx],
-            'low': day_data['low'][idx],
-            'price_limit_status': day_data['price_limit_status'][idx]
-        }
+        key = today * 1000000 + code
+        return self.full_data_dict.get(key, _EMPTY_FULL_DATA)
 
     def get_stock_name(self, code: int | str) -> str:
         """根据股票代码获取股票名称"""
