@@ -71,24 +71,6 @@ class StockCalendar:
 
         return -1
 
-    def gap(self, start: int, end: int) -> int:
-        """
-        计算 start 到 end 之间的交易日数量，使用预计算的日期范围快速判断
-        """
-        # 快速范围检查（避免两次dict查找）
-        if start < self._min_date or start > self._max_date or end < self._min_date or end > self._max_date:
-            return -1
-
-        start_index = self.date_to_index.get(start, -1)
-        if start_index == -1:
-            return -1
-
-        end_index = self.date_to_index.get(end, -1)
-        if end_index == -1 or start_index > end_index:
-            return -1
-
-        return end_index - start_index + 1
-
     def get_date(self, idx: int) -> int:
         """
         根据索引获取日期，使用预转换的列表实现 O(1) 时间复杂度
@@ -121,11 +103,12 @@ class StockCalendar:
                     return date_val
         return today_int
 
-    def get_date_arr(self, period_days: int = 20) -> list:
-        """生成固定交易天数的周期数组
+    def get_date_arr(self, period_days: int = 20, roll_days: int = 10) -> list:
+        """生成滚动交叉的周期数组
 
         Args:
             period_days: 每个周期的交易天数，默认20天
+            roll_days: 滚动步长，默认10天（即相邻周期重叠10天）
 
         Returns:
             list: [[start_date, end_date], ...]
@@ -156,23 +139,19 @@ class StockCalendar:
             end = self.get_date(period_end_idx)
             result.append([start, end])
 
-            # 移动到下一个周期（不重叠）
-            current_idx = period_end_idx + 1
+            # 滚动到下一个周期（重叠roll_days天）
+            current_idx += roll_days
 
         # 打印周期信息
-        print(f"\n周期划分结果 (每{period_days}个交易日):")
+        print(f"\n周期划分结果 (每{period_days}个交易日, 滚动{roll_days}天):")
         print(f"总周期数: {len(result)}")
         print(f"日期范围: {start_date} - {end_date}")
         if result:
             print(f"第一个周期: {result[0][0]} - {result[0][1]}")
             print(f"最后一个周期: {result[-1][0]} - {result[-1][1]}")
-            # 计算丢弃的日期
-            last_end_idx = self.start(result[-1][1])
-            discarded = end_idx - last_end_idx
-            if discarded > 0:
-                discarded_start = self.get_date(last_end_idx + 1)
-                discarded_end = self.get_date(end_idx)
-                print(f"丢弃的日期: {discarded}个交易日 ({discarded_start} - {discarded_end})")
+            if len(result) > 1:
+                overlap = period_days - roll_days
+                print(f"周期重叠: {overlap}天")
         print()
 
         return result
@@ -180,41 +159,8 @@ class StockCalendar:
 
 if __name__ == "__main__":
     sc=StockCalendar()
-    index=sc.start(20260101)
-    print(index)
-    index=sc.next(index)
-    date=sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
-    index += 1
-    date = sc.get_date(index)
-    print(date)
+    index=sc.get_date_arr()
+    
     
 
 

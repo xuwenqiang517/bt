@@ -38,10 +38,10 @@ class ParamRanges:
     sort_desc_range: List[int] = field(default_factory=lambda: [0])  # 排序方向, 0=成交量升序(冷门股), 1=成交量降序(热门股)
 
     # 卖出参数（4个）- 根据回测结果精简
-    sell_stop_loss_range: List[int] = field(default_factory=lambda: r(-12, -5))  # 止损率%: -12到-5
+    sell_stop_loss_range: List[int] = field(default_factory=lambda: r(-10, -8))  # 止损率%: -12到-5
     sell_hold_days_range: List[int] = field(default_factory=lambda: r(5, 9))  # 持仓天数: 5-9天
-    sell_target_return_range: List[int] = field(default_factory=lambda: r(6, 20,2))  # 目标涨幅%: 6-10%
-    sell_trailing_range: List[int] = field(default_factory=lambda: r(3, 7,2))  # 回撤止盈率%: 3-5%
+    sell_target_return_range: List[int] = field(default_factory=lambda: r(6, 12,2))  # 目标涨幅%: 6-10%
+    sell_trailing_range: List[int] = field(default_factory=lambda: r(3, 15,3))  # 回撤止盈率%: 3-5%
     
     # 默认初始资金（分）
     default_init_amount: int = 10000000  # 10万元 = 10000000分
