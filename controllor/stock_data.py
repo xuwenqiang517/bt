@@ -181,6 +181,7 @@ class StockData:
     def get_hs300_codes(self, cache, today):
         """获取沪深300成分股代码列表，带日期缓存"""
         cache_file_name = f"hs300_cons_{today}"
+        cache.clean(prefix="hs300_cons_",ignore=[cache_file_name])
         hs300_df = cache.get(cache_file_name)
         
         if hs300_df is None:
@@ -296,7 +297,7 @@ class StockData:
 
         else:
             print(f"缓存取股票数据 {all_cache_file_name} 成功")
-        # cache.clean(prefix="stock_data_")
+        cache.clean(prefix="stock_data_")
         return stock_data
 
 

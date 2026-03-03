@@ -1,3 +1,4 @@
+import logger_config  # 导入日志配置，重定向stdout到log.txt
 from typing import List,  Dict, Any
 
 from stock_calendar import StockCalendar as sc
@@ -104,10 +105,19 @@ class Chain:
 
         from pathlib import Path
         import os
+        import glob
 
         # 计算保存路径
         data_dir = Path(__file__).resolve().parent.parent / "./data"
         os.makedirs(data_dir, exist_ok=True)
+
+        # 清理旧的"交易明细_"前缀文件
+        prefix = "交易明细_"
+        for old_file in glob.glob(str(data_dir / f"{prefix}*.png")):
+            try:
+                os.remove(old_file)
+            except OSError:
+                pass
 
         # 生成文件名
         import re
@@ -402,7 +412,7 @@ class Chain:
                     all_daily_values.extend(strategy.daily_values)
 
                 init_amount = params.get('base_param_arr')[0]
-                max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
+                max_drawdown_ok = result.期min >= init_amount * 0.8 if hasattr(result, '期min') else True
 
                 if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
@@ -495,20 +505,20 @@ class Chain:
         return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """排序DataFrame，按年周期收益率倒排（如果有该列）"""
+        """排序DataFrame，按年收益倒排（如果有该列）"""
         if df.is_empty():
             return df
-        # 只有在有年周期收益率列时才排序
-        if '年周期收益率' not in df.columns:
+        # 只有在有年收益列时才排序
+        if '年收益' not in df.columns:
             return df
-        # 将年周期收益率转换为数值类型（处理字符串百分比格式）
+        # 将年收益转换为数值类型（处理字符串百分比格式）
         df = df.with_columns(
-            pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
+            pl.col('年收益').str.replace('%', '').cast(pl.Float64).alias('年收益数值')
         )
-        # 按年周期收益率数值降序排序
-        df = df.sort(by='年周期收益率数值', descending=True)
+        # 按年收益数值降序排序
+        df = df.sort(by='年收益数值', descending=True)
         # 删除临时列
-        df = df.drop('年周期收益率数值')
+        df = df.drop('年收益数值')
         return df
 
     def _calc_pick_signal_stats(self, pick_signals: list, stock_data, calendar) -> dict | None:
@@ -665,13 +675,13 @@ class Chain:
         # 去重并排序
         if not main_a_df.is_empty() and not self.chain_debug:
             main_a_df = main_a_df.unique(subset=['配置'])
-            # 按年周期收益率排序（处理字符串百分比格式），只有在有该列时才排序
-            if '年周期收益率' in main_a_df.columns:
+            # 按年收益排序（处理字符串百分比格式），只有在有该列时才排序
+            if '年收益' in main_a_df.columns:
                 main_a_df = main_a_df.with_columns(
-                    pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
+                    pl.col('年收益').str.replace('%', '').cast(pl.Float64).alias('年收益数值')
                 )
-                main_a_df = main_a_df.sort(by='年周期收益率数值', descending=True)
-                main_a_df = main_a_df.drop('年周期收益率数值')
+                main_a_df = main_a_df.sort(by='年收益数值', descending=True)
+                main_a_df = main_a_df.drop('年收益数值')
             # 保存到缓存
             self._save_cache(cache, main_cache_filename, main_a_df)
         
@@ -782,8 +792,8 @@ class Chain:
             print(f"总收益率: {result.总收益率*100:.2f}%")
             print(f"胜率: {result.胜率*100:.2f}%")
             print(f"交易次数: {result.交易次数}")
-            print(f"最大资金: {result.最大资金/100:.2f}")
-            print(f"最小资金: {result.最小资金/100:.2f}")
+            print(f"最大资金: {result.期max/100:.2f}")
+            print(f"最小资金: {result.期min/100:.2f}")
             print(f"夏普比率: {result.夏普比率:.2f}")
             print(f"平均资金使用率: {result.平均资金使用率*100:.2f}%")
             print("=" * 50)
@@ -894,7 +904,7 @@ class Chain:
 
                 # 过滤条件：收益率为负 或 最大回撤超过20%（最小资金<初始资金80%）
                 init_amount = params.get('base_param_arr')[0]
-                max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
+                max_drawdown_ok = result.期min >= init_amount * 0.8 if hasattr(result, '期min') else True
 
                 if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1

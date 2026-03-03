@@ -16,43 +16,42 @@ class ResultSchema:
         ("总收益率", float, 0.0),
         ("胜率", float, 0.0),
         ("交易次数", int, 0),
-        ("最大资金", float, 0.0),
-        ("最小资金", float, 0.0),
+        ("期max", float, 0.0),
+        ("期min", float, 0.0),
         ("平均资金使用率", float, 0.0),
         ("卖出统计", dict, lambda: {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0}),
     ]
 
     # Chain层扩展字段
     CHAIN_FIELDS = [
-        ("周期胜率", str, ""),
-        ("平均胜率", str, ""),
-        ("平均收益率", str, ""),
-        ("年周期收益率", str, ""),
-        ("年周期胜率", str, ""),
-        ("平均交易次数", float, 0.0),
-        ("平均资金使用率", str, ""),
-        ("最大资金", float, 0.0),
-        ("最小资金", float, 0.0),
-        ("年周期夏普", float, 0.0),
-        ("年最大资金", float, 0.0),
-        ("年最小资金", float, 0.0),
-        ("年交易次数", float, 0.0),
-        ("止损次数", float, 0.0),
-        ("到期盈利", float, 0.0),
-        ("到期亏损", float, 0.0),
-        ("回落止盈", float, 0.0),
+        ("总胜率", str, ""),
+        ("期胜率", str, ""),
+        ("年胜率", str, "0%"),
+        ("期收益", str, ""),
+        ("年收益", str, "0.00%"),
+        ("年交易数", int, 0),
+        ("期max", str, ""),
+        ("期min", str, ""),
+        ("年max", str, ""),
+        ("年min", str, ""),
+        ("年夏普", float, 0.0),
         ("配置", str, ""),
         # 选股信号统计字段
         ("选股信号数", int, 0),
         ("1日胜率", str, ""),
-        ("1日盈亏比", str, ""),
-        ("1日平均收益", str, ""),
         ("3日胜率", str, ""),
-        ("3日盈亏比", str, ""),
-        ("3日平均收益", str, ""),
         ("5日胜率", str, ""),
+        ("1日盈亏比", str, ""),
+        ("3日盈亏比", str, ""),
         ("5日盈亏比", str, ""),
+        ("1日平均收益", str, ""),
+        ("3日平均收益", str, ""),
         ("5日平均收益", str, ""),
+        # 卖出策略统计字段
+        ("止损次数", int, 0),
+        ("到期盈利", int, 0),
+        ("到期亏损", int, 0),
+        ("回落止盈", int, 0),
     ]
 
     @classmethod
@@ -82,8 +81,8 @@ class ResultSchema:
             "总收益率": 0.0,
             "胜率": 0.0,
             "交易次数": 0,
-            "最大资金": init_amount,
-            "最小资金": init_amount,
+            "期max": init_amount,
+            "期min": init_amount,
             "平均资金使用率": 0.0,
             "卖出统计": {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0},
             "夏普比率": 0.0
@@ -118,37 +117,51 @@ class ResultSchema:
         """从BacktestResult列表创建Chain层行数据"""
         if not results:
             row = cls.create_empty_chain_row(cache_key)
-            row["周期胜率"] = f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})"
+            row["总胜率"] = f"{successful_count}/{total_periods}"
             return row
 
+        # 资金转换为万为单位
+        def to_wan_str(value):
+            """将分转换为万，保留整数，带万字"""
+            return f"{int(value / 1000000)}万"
+
         row = {
-            "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
-            "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
-            "平均收益率": f"{float(np.mean([x.总收益率 for x in results])) * 100:.2f}%",
-            "平均交易次数": round(float(np.mean([x.交易次数 for x in results])), 1),
-            "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
-            "最大资金": float(max([x.最大资金 for x in results])),
-            "最小资金": float(min([x.最小资金 for x in results])),
-            "配置": cache_key
+            "总胜率": f"{successful_count}/{total_periods}",
+            "期胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
+            "期收益": f"{float(np.mean([x.总收益率 for x in results])) * 100:.1f}%",
+            "期max": to_wan_str(max([x.期max for x in results])),
+            "期min": to_wan_str(min([x.期min for x in results])),
+            "配置": cache_key,
+            # 年周期字段默认值（当年周期未执行时）
+            "年收益": "0.0%",
+            "年胜率": "0%",
+            "年夏普": 0.0,
+            "年max": "0万",
+            "年min": "0万",
+            "年交易数": 0,
+            "止损次数": 0,
+            "到期盈利": 0,
+            "到期亏损": 0,
+            "回落止盈": 0
         }
 
         # 年周期统计
         if year_result:
             row.update({
-                "年周期收益率": f"{float(year_result.总收益率) * 100:.2f}%",
-                "年周期胜率": f"{int(year_result.胜率 * 100)}%",
-                "年周期夏普": round(float(year_result.夏普比率), 2),
-                "年最大资金": float(year_result.最大资金),
-                "年最小资金": float(year_result.最小资金),
-                "年交易次数": float(year_result.交易次数)
+                "年收益": f"{float(year_result.总收益率) * 100:.1f}%",
+                "年胜率": f"{int(year_result.胜率 * 100)}%",
+                "年夏普": round(float(year_result.夏普比率), 1),
+                "年max": to_wan_str(year_result.期max),
+                "年min": to_wan_str(year_result.期min),
+                "年交易数": int(year_result.交易次数)
             })
             if hasattr(year_result, '卖出统计'):
                 sell_stats = year_result.卖出统计
                 row.update({
-                    "止损次数": float(sell_stats.get('止损', 0)),
-                    "到期盈利": float(sell_stats.get('到期盈利', 0)),
-                    "到期亏损": float(sell_stats.get('到期亏损', 0)),
-                    "回落止盈": float(sell_stats.get('回落止盈', 0))
+                    "止损次数": int(sell_stats.get('止损', 0)),
+                    "到期盈利": int(sell_stats.get('到期盈利', 0)),
+                    "到期亏损": int(sell_stats.get('到期亏损', 0)),
+                    "回落止盈": int(sell_stats.get('回落止盈', 0))
                 })
 
         return row
@@ -245,8 +258,8 @@ BacktestResult=NamedTuple("BacktestResult", [
     ("总收益率", float),
     ("胜率", float),
     ("交易次数", int),
-    ("最大资金", float),
-    ("最小资金", float),
+    ("期max", float),
+    ("期min", float),
     ("平均资金使用率", float),
     ("卖出统计", dict),  # 卖出原因统计：止损、到期盈利、到期亏损、回落止盈
     ("夏普比率", float)  # 仅年周期计算

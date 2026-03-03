@@ -1,4 +1,6 @@
+import logger_config  # 导入日志配置，重定向stdout到log.txt
 from chain import Chain
+from stock_calendar import StockCalendar as sc
 from param_config import parse_strategy_string
 
 def str2dict(strategy_params: str) -> list:
@@ -13,14 +15,10 @@ def str2dict(strategy_params: str) -> list:
 
 
 def bt_one(strategy_params, day_array, run_year=False):
-    # from datetime import datetime
-    # current_time = datetime.now().strftime("%m%d_%H%M")
-    # result_file = f"one_连涨{day_array[0][0]}-{day_array[-1][1]}-{len(day_array)}-{current_time}"
     param = {
         "strategy": str2dict(strategy_params),
         "date_arr": day_array,
         "chain_debug": 1,
-        # "result_file": result_file,
         "run_year": run_year
     }
     chain = Chain(param=param)
@@ -29,8 +27,10 @@ def bt_one(strategy_params, day_array, run_year=False):
 
 if __name__ == "__main__":
     s = """
-    1|-1,-1,8,15,15,20,2|0|-9,6,6,5
+    1|-1,5,10,-1,10,30,2|0|-7,9,7,3
     """
-    bt_one(s,[[20250101,20260101]])
-    # bt_one(s,[[20250101,20260301]])
+    # bt_one(s,sc().get_date_arr())
+    # bt_one(s,[[20250101,20260101]])
+    # bt_one(s,[[20250101,20260302]])
+    bt_one(s,[[20260101,20260302]])
     

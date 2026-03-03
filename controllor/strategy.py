@@ -1,3 +1,4 @@
+import logger_config  # 导入日志配置，重定向stdout到log.txt
 import sys
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
@@ -789,8 +790,8 @@ class Strategy:
             总收益率=total_return_pct,
             胜率=win_rate,
             交易次数=trade_count,
-            最大资金=max_value,
-            最小资金=min_value,
+            期max=max_value,
+            期min=min_value,
             平均资金使用率=avg_utilization,
             卖出统计=sell_stats
         )
