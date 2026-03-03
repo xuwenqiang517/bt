@@ -445,7 +445,7 @@ class Strategy:
             buy_count = int(valid_counts[i])
             # 加入滑点：买入价格上浮
             buy_price_with_slippage = int(next_open * (1 + self._slippage_rate))
-            hold_stock = HoldStock(code, buy_price_with_slippage, buy_count, today)
+            hold_stock = HoldStock(code, buy_price_with_slippage, buy_count, today, self.today_index)
             self._add_hold(hold_stock)
             # 计算成本：股票价格 + 手续费
             stock_cost = buy_count * buy_price_with_slippage
@@ -587,8 +587,8 @@ class Strategy:
         target_return_price = int(buy_price * (1 + self._target_return))
         trailing_stop_price = int(highest_price * (1 - self._trailing_rate)) if highest_price > 0 else 0
 
-        # 获取持仓天数
-        hold_days = self.calendar.gap(hold.buy_day, self.today) if self.calendar else 0
+        # 获取持仓天数：使用缓存的索引直接计算，纯整数减法
+        hold_days = self.today_index - hold.buy_day_index + 1
 
         # 使用Numba进行核心计算
         need_sell, sell_price = _check_sell_numba(
@@ -669,7 +669,8 @@ class Strategy:
             # 计算持仓盈亏
             profit_cents = (close_price - buy_price) * buy_count
             profit_rate = (close_price - buy_price) / buy_price if buy_price > 0 else 0
-            hold_days = self.calendar.gap(hold_stock.buy_day, today) if self.calendar else 0
+            # 使用缓存的索引直接计算持仓天数，纯整数减法
+            hold_days = self.today_index - hold_stock.buy_day_index + 1
             market_value = close_price * buy_count
 
             daily_holdings.append({
@@ -713,12 +714,22 @@ class Strategy:
             print(f"日期 {today} 持有股票总市值 {hold_amount_元:.2f}, 可用资金 {free_amount_元:.2f}, 总资产 {total_value_元:.2f}")
             print("\n")
     
-    def update_today(self, today: int) -> None:
-        """更新当前日期"""
+    def update_today(self, today: int, today_index: int = 0) -> None:
+        """更新当前日期和索引
+        Args:
+            today: 当前日期
+            today_index: 当前日期在交易日历中的索引，用于快速计算持仓天数
+        """
         self.today = today
+        self.today_index = today_index  # 缓存日期索引，避免重复dict查找
 
-    def calculate_performance(self, start_date: int, end_date: int) -> BacktestResult:
-        """计算并返回策略性能指标"""
+    def calculate_performance(self, start_date: int, end_date: int, calc_sharpe: bool = False) -> BacktestResult:
+        """计算并返回策略性能指标
+        Args:
+            start_date: 起始日期
+            end_date: 结束日期
+            calc_sharpe: 是否计算夏普比率（仅年周期需要）
+        """
         init_amount = self.init_amount
         trades_history = self.trades_history
         hold = self.hold
@@ -765,9 +776,9 @@ class Strategy:
         else:
             max_value = min_value = init_amount
 
-        # 计算夏普比率
-        sharpe_ratio = 0
-        if len(daily_values) > 1:
+        # 计算夏普比率（仅在需要时计算）
+        sharpe_ratio = 0.0
+        if calc_sharpe and len(daily_values) > 1:
             daily_returns = [(daily_values[i]['value'] - daily_values[i-1]['value']) / daily_values[i-1]['value']
                             for i in range(1, len(daily_values)) if daily_values[i-1]['value'] > 0]
             if daily_returns:
@@ -779,19 +790,18 @@ class Strategy:
 
         sell_stats = getattr(self, 'sell_stats', {'止损': 0, '到期盈利': 0, '到期亏损': 0, '回落止盈': 0})
 
-        result_dict = ResultSchema.create_backtest_result(
-            起始日期=str(start_date),
-            结束日期=str(end_date),
+        return BacktestResult(
+            起始日期=start_date,
+            结束日期=end_date,
             初始资金=init_amount,
             最终资金=final_total_value,
             总收益=total_return,
             总收益率=total_return_pct,
             胜率=win_rate,
             交易次数=trade_count,
-            最大资金=max_value,
-            最小资金=min_value,
-            夏普比率=sharpe_ratio,
+            期max=max_value,
+            期min=min_value,
             平均资金使用率=avg_utilization,
-            卖出统计=sell_stats
+            卖出统计=sell_stats,
+            夏普比率=sharpe_ratio
         )
-        return BacktestResult(**result_dict)

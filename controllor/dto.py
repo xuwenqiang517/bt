@@ -28,21 +28,21 @@ class ResultSchema:
         ("周期胜率", str, ""),
         ("平均胜率", str, ""),
         ("平均收益率", str, ""),
-        ("年周期收益率", str, ""),
-        ("年周期胜率", str, ""),
+        ("年收益", str, ""),
+        ("年胜率", str, ""),
         ("平均交易次数", float, 0.0),
         ("平均资金使用率", str, ""),
-        ("最大资金", float, 0.0),
-        ("最小资金", float, 0.0),
-        ("夏普比率", float, 0.0),
-        ("年周期夏普", float, 0.0),
-        ("年最大资金", float, 0.0),
-        ("年最小资金", float, 0.0),
-        ("年交易次数", float, 0.0),
-        ("止损次数", float, 0.0),
-        ("到期盈利", float, 0.0),
-        ("到期亏损", float, 0.0),
-        ("回落止盈", float, 0.0),
+        ("期max", float, 0.0),
+        ("期min", float, 0.0),
+        ("夏普", float, 0.0),
+        ("年夏普", float, 0.0),
+        ("年max", str, ""),
+        ("年min", str, ""),
+        ("年交易数", int, 0),
+        ("止损数", int, 0),
+        ("到期盈", int, 0),
+        ("到期亏", int, 0),
+        ("回落止盈", int, 0),
         ("配置", str, ""),
         # 选股信号统计字段
         ("选股信号数", int, 0),
@@ -123,35 +123,39 @@ class ResultSchema:
             row["周期胜率"] = f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})"
             return row
 
+        # 辅助函数：转换为万单位字符串
+        def to_wan_str(value):
+            return f"{value/10000:.0f}万" if value >= 10000 else f"{value/100:.0f}"
+
         row = {
             "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
             "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
             "平均收益率": f"{float(np.mean([x.总收益率 for x in results])) * 100:.2f}%",
             "平均交易次数": round(float(np.mean([x.交易次数 for x in results])), 1),
             "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
-            "最大资金": float(max([x.最大资金 for x in results])),
-            "最小资金": float(min([x.最小资金 for x in results])),
-            "夏普比率": round(float(np.mean([x.夏普比率 for x in results])), 2),
+            "期max": float(max([x.期max for x in results])),
+            "期min": float(min([x.期min for x in results])),
+            "夏普": round(float(np.mean([x.夏普比率 for x in results])), 1),
             "配置": cache_key
         }
 
         # 年周期统计
         if year_result:
             row.update({
-                "年周期收益率": f"{float(year_result.总收益率) * 100:.2f}%",
-                "年周期胜率": f"{int(year_result.胜率 * 100)}%",
-                "年周期夏普": round(float(year_result.夏普比率), 2),
-                "年最大资金": float(year_result.最大资金),
-                "年最小资金": float(year_result.最小资金),
-                "年交易次数": float(year_result.交易次数)
+                "年收益": f"{float(year_result.总收益率) * 100:.1f}%",
+                "年胜率": f"{int(year_result.胜率 * 100)}%",
+                "年夏普": round(float(year_result.夏普比率), 1),
+                "年max": to_wan_str(year_result.期max),
+                "年min": to_wan_str(year_result.期min),
+                "年交易数": int(year_result.交易次数)
             })
             if hasattr(year_result, '卖出统计'):
                 sell_stats = year_result.卖出统计
                 row.update({
-                    "止损次数": float(sell_stats.get('止损', 0)),
-                    "到期盈利": float(sell_stats.get('到期盈利', 0)),
-                    "到期亏损": float(sell_stats.get('到期亏损', 0)),
-                    "回落止盈": float(sell_stats.get('回落止盈', 0))
+                    "止损数": int(sell_stats.get('止损', 0)),
+                    "到期盈": int(sell_stats.get('到期盈利', 0)),
+                    "到期亏": int(sell_stats.get('到期亏损', 0)),
+                    "回落止盈": int(sell_stats.get('回落止盈', 0))
                 })
 
         return row
@@ -190,17 +194,19 @@ class HoldStock:
         "buy_price",     # 买入价格（建议用float，实际价格多为小数）
         "buy_count",     # 买入数量
         "buy_day",       # 买入日期
+        "buy_day_index", # 买入日期在交易日历中的索引，用于快速计算持仓天数
         "sell_price",    # 卖出价格（初始可设为None）
         "sell_day",      # 卖出日期（初始可设为None）
-        "highest_price"  # 持仓期间最高价（初始可设为买入价）
+        "highest_price"  # 持仓期间最高价（初始为买入价）
     ]
-    
-    def __init__(self, code, buy_price, buy_count, buy_day):
+
+    def __init__(self, code, buy_price, buy_count, buy_day, buy_day_index=0):
         # 初始化必填的买入信息
         self.code = code
         self.buy_price = buy_price
         self.buy_count = buy_count
         self.buy_day = buy_day
+        self.buy_day_index = buy_day_index  # 交易日历索引，避免重复查表
         # 初始化可变字段（卖出相关为None，最高价初始为买入价）
         self.sell_price = None
         self.sell_day = None
@@ -240,19 +246,19 @@ TrailingStopProfitParams=NamedTuple("TrailingStopProfitParams", [
 ])
 
 BacktestResult=NamedTuple("BacktestResult", [
-    ("起始日期", str),
-    ("结束日期", str),
+    ("起始日期", int),
+    ("结束日期", int),
     ("初始资金", float),
     ("最终资金", float),
     ("总收益", float),
     ("总收益率", float),
     ("胜率", float),
     ("交易次数", int),
-    ("最大资金", float),
-    ("最小资金", float),
-    ("夏普比率", float),
+    ("期max", float),
+    ("期min", float),
     ("平均资金使用率", float),
-    ("卖出统计", dict)  # 卖出原因统计：止损、到期盈利、到期亏损、回落止盈
+    ("卖出统计", dict),  # 卖出原因统计：止损、到期盈利、到期亏损、回落止盈
+    ("夏普比率", float)  # 仅年周期计算
 ])
 
 StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [
@@ -262,3 +268,31 @@ StrategyBacktestResult=NamedTuple("StrategyBacktestResult", [
     ("周期胜率", float),
     ("平均最大回撤", float)
 ])
+
+
+class TradeRecord:
+    """交易记录 - 使用__slots__减少内存占用"""
+    __slots__ = ['date', 'code', 'buy_date', 'buy_price', 'sell_price', 'quantity', 'profit', 'profit_rate', 'reason']
+
+    def __init__(self, date: int, code: int, buy_date: int, buy_price: int, sell_price: int,
+                 quantity: int, profit: int, profit_rate: float, reason: str):
+        self.date = date
+        self.code = code
+        self.buy_date = buy_date
+        self.buy_price = buy_price
+        self.sell_price = sell_price
+        self.quantity = quantity
+        self.profit = profit
+        self.profit_rate = profit_rate
+        self.reason = reason
+
+
+class DailyValue:
+    """每日资产记录 - 使用__slots__减少内存占用"""
+    __slots__ = ['date', 'value', 'free_amount', 'holdings']
+
+    def __init__(self, date: int, value: int, free_amount: int, holdings: list):
+        self.date = date
+        self.value = value
+        self.free_amount = free_amount
+        self.holdings = holdings

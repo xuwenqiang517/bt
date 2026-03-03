@@ -431,7 +431,7 @@ class Chain:
                     all_daily_values.extend(strategy.daily_values)
 
                 init_amount = params.get('base_param_arr')[0]
-                max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
+                max_drawdown_ok = result.期min >= init_amount * 0.8 if hasattr(result, '期min') else True
 
                 if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
@@ -524,20 +524,20 @@ class Chain:
         return self._sort_data(merged_df)
 
     def _sort_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        """排序DataFrame，按年周期收益率倒排（如果有该列）"""
+        """排序DataFrame，按年收益倒排（如果有该列）"""
         if df.is_empty():
             return df
-        # 只有在有年周期收益率列时才排序
-        if '年周期收益率' not in df.columns:
+        # 只有在有年收益列时才排序
+        if '年收益' not in df.columns:
             return df
-        # 将年周期收益率转换为数值类型（处理字符串百分比格式）
+        # 将年收益转换为数值类型（处理字符串百分比格式）
         df = df.with_columns(
-            pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
+            pl.col('年收益').str.replace('%', '').cast(pl.Float64).alias('年收益数值')
         )
-        # 按年周期收益率数值降序排序
-        df = df.sort(by='年周期收益率数值', descending=True)
+        # 按年收益数值降序排序
+        df = df.sort(by='年收益数值', descending=True)
         # 删除临时列
-        df = df.drop('年周期收益率数值')
+        df = df.drop('年收益数值')
         return df
 
     def _calc_pick_signal_stats(self, pick_signals: list, stock_data, calendar) -> dict | None:
@@ -694,13 +694,13 @@ class Chain:
         # 去重并排序
         if not main_a_df.is_empty() and not self.chain_debug:
             main_a_df = main_a_df.unique(subset=['配置'])
-            # 按年周期收益率排序（处理字符串百分比格式），只有在有该列时才排序
-            if '年周期收益率' in main_a_df.columns:
+            # 按年收益排序（处理字符串百分比格式），只有在有该列时才排序
+            if '年收益' in main_a_df.columns:
                 main_a_df = main_a_df.with_columns(
-                    pl.col('年周期收益率').str.replace('%', '').cast(pl.Float64).alias('年周期收益率数值')
+                    pl.col('年收益').str.replace('%', '').cast(pl.Float64).alias('年收益数值')
                 )
-                main_a_df = main_a_df.sort(by='年周期收益率数值', descending=True)
-                main_a_df = main_a_df.drop('年周期收益率数值')
+                main_a_df = main_a_df.sort(by='年收益数值', descending=True)
+                main_a_df = main_a_df.drop('年收益数值')
             # 保存到缓存
             self._save_cache(cache, main_cache_filename, main_a_df)
         
@@ -772,30 +772,38 @@ class Chain:
         return
 
 
-    def execute_one_strategy(self, strategy, start_date, end_date, stock_data, calendar) -> BacktestResult:
-        """执行单个策略"""
+    def execute_one_strategy(self, strategy, start_date, end_date, stock_data, calendar, calc_sharpe: bool = False) -> BacktestResult:
+        """执行单个策略
+        Args:
+            strategy: 策略实例
+            start_date: 起始日期
+            end_date: 结束日期
+            stock_data: 股票数据
+            calendar: 交易日历
+            calc_sharpe: 是否计算夏普比率（仅年周期需要）
+        """
         scalendar = calendar
         current_idx = scalendar.start(start_date)
         end_idx = scalendar.start(end_date)
-        
+
         # 日期不符合直接抛异常
         if current_idx == -1 or end_idx == -1:
             raise ValueError(f"Invalid date range: {start_date} to {end_date}")
-        
+
         strategy.bind(stock_data, calendar)
         strategy.reset()
 
         while current_idx != -1 and current_idx <= end_idx:
             current_date = scalendar.get_date(current_idx)
-            strategy.update_today(current_date)
+            strategy.update_today(current_date, current_idx)  # 传入日期索引，避免重复dict查找
             # 固定先卖后买
             strategy.sell()
             strategy.buy()
             strategy.pick()
             strategy.settle_amount()
-            current_idx = scalendar.next(current_idx)
-        
-        result = strategy.calculate_performance(start_date, end_date)
+            current_idx += 1  # 直接+1，下一个交易日索引
+
+        result = strategy.calculate_performance(start_date, end_date, calc_sharpe)
 
         if self.chain_debug:
             print("=" * 50)
@@ -804,8 +812,8 @@ class Chain:
             print(f"总收益率: {result.总收益率*100:.2f}%")
             print(f"胜率: {result.胜率*100:.2f}%")
             print(f"交易次数: {result.交易次数}")
-            print(f"最大资金: {result.最大资金/100:.2f}")
-            print(f"最小资金: {result.最小资金/100:.2f}")
+            print(f"最大资金: {result.期max/100:.2f}")
+            print(f"最小资金: {result.期min/100:.2f}")
             print(f"夏普比率: {result.夏普比率:.2f}")
             print(f"平均资金使用率: {result.平均资金使用率*100:.2f}%")
             print("=" * 50)
@@ -916,7 +924,7 @@ class Chain:
 
                 # 过滤条件：收益率为负 或 最大回撤超过20%（最小资金<初始资金80%）
                 init_amount = params.get('base_param_arr')[0]
-                max_drawdown_ok = result.最小资金 >= init_amount * 0.8 if hasattr(result, '最小资金') else True
+                max_drawdown_ok = result.期min >= init_amount * 0.8 if hasattr(result, '期min') else True
 
                 if result.总收益率 <= 0 or not max_drawdown_ok:
                     failure_count += 1
@@ -936,7 +944,7 @@ class Chain:
             pick_signal_stats = None
             if self.run_year:
                 try:
-                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar)
+                    year_result = self.execute_one_strategy(strategy, 20250101, 20260101, stock_data, calendar, calc_sharpe=True)
                     # 年周期回测后，统计选股信号表现
                     if hasattr(strategy, 'pick_signals') and strategy.pick_signals:
                         pick_signal_stats = self._calc_pick_signal_stats(
