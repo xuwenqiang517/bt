@@ -305,3 +305,23 @@ class DailyValue:
         self.value = value
         self.free_amount = free_amount
         self.holdings = holdings
+
+
+class HoldingsData:
+    """持仓数据 - 使用__slots__减少内存占用"""
+    __slots__ = ['code', 'buy_price', 'close_price', 'buy_count', 'market_value',
+                 'profit', 'profit_rate', 'hold_days', 'highest_price', 'buy_day']
+
+    def __init__(self, code: int, buy_price: int, close_price: int, buy_count: int,
+                 market_value: int, profit: int, profit_rate: float, hold_days: int,
+                 highest_price: int, buy_day: int = 0):
+        self.code = code
+        self.buy_price = buy_price
+        self.close_price = close_price
+        self.buy_count = buy_count
+        self.market_value = market_value
+        self.profit = profit
+        self.profit_rate = profit_rate
+        self.hold_days = hold_days
+        self.highest_price = highest_price
+        self.buy_day = buy_day

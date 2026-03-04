@@ -7,7 +7,7 @@ import numpy as np
 from numba import njit
 
 from dto import *
-from dto import ResultSchema
+from dto import ResultSchema, HoldingsData
 
 # 导入日志配置
 import logger_config
@@ -650,17 +650,18 @@ class Strategy:
             hold_days = self.today_index - hold_stock.buy_day_index + 1
             market_value = close_price * buy_count
 
-            daily_holdings.append({
-                'code': code,
-                'buy_price': buy_price,
-                'close_price': close_price,
-                'buy_count': buy_count,
-                'market_value': market_value,
-                'profit': profit_cents,
-                'profit_rate': profit_rate,
-                'hold_days': hold_days,
-                'highest_price': hold_stock.highest_price
-            })
+            daily_holdings.append(HoldingsData(
+                code=code,
+                buy_price=buy_price,
+                close_price=close_price,
+                buy_count=buy_count,
+                market_value=market_value,
+                profit=profit_cents,
+                profit_rate=profit_rate,
+                hold_days=hold_days,
+                highest_price=hold_stock.highest_price,
+                buy_day=hold_stock.buy_day
+            ))
 
             if is_debug:
                 highest_price = hold_stock.highest_price

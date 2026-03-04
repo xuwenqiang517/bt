@@ -120,19 +120,9 @@ class Chain:
         save_path = data_dir / file_name
 
         # 准备数据
-        dates = [f"{dv['date']:08d}" for dv in daily_values]
-        values = [dv['value'] / 100 for dv in daily_values]
-        date_to_idx = {dv['date']: i for i, dv in enumerate(daily_values)}
-
-        # 调试：打印1117-1119期间的数据
-        if self.chain_debug:
-            print("\n=== 调试：daily_values 数据 ===")
-            for dv in daily_values:
-                d = dv['date']
-                if 20251115 <= d <= 20251122:
-                    holdings = dv.get('holdings', [])
-                    hold_info = ', '.join([f"{h['code']}({h['profit_rate']:.2%})" for h in holdings]) if holdings else '空仓'
-                    print(f"日期 {d}: 总资产 {dv['value']/100:.2f}, 持仓: {hold_info}")
+        dates = [f"{dv.date:08d}" for dv in daily_values]
+        values = [dv.value / 100 for dv in daily_values]
+        date_to_idx = {dv.date: i for i, dv in enumerate(daily_values)}
 
         # 创建数值索引用于画图（避免字符串日期导致的分类轴问题）
         x_indices = list(range(len(dates)))
@@ -141,14 +131,14 @@ class Chain:
         # 收集每只股票的持仓期间盈亏率
         stock_holdings = {}
         for dv in daily_values:
-            date = dv['date']
+            date = dv.date
             if date not in date_to_idx:
                 continue
             date_idx = date_to_idx[date]
-            holdings = dv.get('holdings', [])
+            holdings = dv.holdings
             for h in holdings:
-                code = h['code']
-                profit_rate = h['profit_rate'] * 100
+                code = h.code
+                profit_rate = h.profit_rate * 100
                 if code not in stock_holdings:
                     stock_holdings[code] = []
                 stock_holdings[code].append((date_idx, profit_rate))
@@ -165,29 +155,29 @@ class Chain:
         ax1.plot(x_indices, values, label='总资产', linewidth=2, color='navy', alpha=0.8)
 
         # 收集已卖出的股票代码
-        sold_codes = {trade['code'] for trade in trades_history}
+        sold_codes = {trade.code for trade in trades_history}
         
         # 获取最后一天未卖出的持仓
         last_day_data = daily_values[-1] if daily_values else None
         unsold_holdings = []
         if last_day_data:
-            last_date = last_day_data['date']
-            last_holdings = last_day_data.get('holdings', [])
+            last_date = last_day_data.date
+            last_holdings = last_day_data.holdings
             for h in last_holdings:
-                if h['code'] not in sold_codes:
+                if h.code not in sold_codes:
                     unsold_holdings.append({
-                        'code': h['code'],
-                        'buy_price': h['buy_price'],
-                        'current_price': h['close_price'],
-                        'profit_rate': h['profit_rate'],
-                        'buy_day': h.get('buy_day', last_date),  # 如果没有buy_day，用最后一天
+                        'code': h.code,
+                        'buy_price': h.buy_price,
+                        'current_price': h.close_price,
+                        'profit_rate': h.profit_rate,
+                        'buy_day': h.buy_day if h.buy_day else last_date,  # 如果没有buy_day，用最后一天
                         'current_day': last_date
                     })
         
         # 标注所有已完成的交易
         for i, trade in enumerate(trades_history):
-            sell_date = trade['date']
-            buy_date = trade['buy_date']
+            sell_date = trade.date
+            buy_date = trade.buy_date
             if sell_date not in date_to_idx or buy_date not in date_to_idx:
                 continue
 
@@ -198,12 +188,12 @@ class Chain:
             x_buy = x_indices[buy_idx]
             y_buy = values[buy_idx]
 
-            code = trade['code']
-            buy_price = trade['buy_price'] / 100
-            sell_price = trade['sell_price'] / 100
-            profit_rate = trade['profit_rate'] * 100
-            profit = trade['profit'] / 100
-            reason = trade.get('reason', '')
+            code = trade.code
+            buy_price = trade.buy_price / 100
+            sell_price = trade.sell_price / 100
+            profit_rate = trade.profit_rate * 100
+            profit = trade.profit / 100
+            reason = trade.reason
 
             hold_days = sell_idx - buy_idx
 
