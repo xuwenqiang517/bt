@@ -23,13 +23,13 @@ class ParamRanges:
     hold_count_range: List[int] = field(default_factory=lambda: [1])  # 持仓数量
     
     # 买入参数（7个）- 扩大参数范围，增加多样性
-    buy_up_day_min_range: List[int] = field(default_factory=lambda: [-1] + r(1, 5))  # 连涨天数下限: -1(不限制), 1-5天
-    buy_up_day_max_range: List[int] = field(default_factory=lambda: [-1] + r(3, 8))  # 连涨天数上限: -1(不限制), 3-8天
-    buy_day3_min_range: List[int] = field(default_factory=lambda: [-1] + r(3, 15, 3))  # 3日涨幅下限%: -1(不限制), 3,5,7,9,11,13,15%
-    buy_day3_max_range: List[int] = field(default_factory=lambda: [-1] + r(10, 30, 3))  # 3日涨幅上限%: -1(不限制), 10,12,14...30%
-    buy_day5_min_range: List[int] = field(default_factory=lambda: [-1] + r(5, 25, 3))  # 5日涨幅下限%: -1(不限制), 5,7,9...25%
-    buy_day5_max_range: List[int] = field(default_factory=lambda: [-1] + r(15, 40, 3))  # 5日涨幅上限%: -1(不限制), 15,17,19...40%
-    change_pct_max_range: List[int] = field(default_factory=lambda: [-1, 2, 4, 6, 8])  # 当日涨幅上限%: -1(不限制), 2,4,6,8%
+    buy_up_day_min_range: List[int] = field(default_factory=lambda: [-1] + r(1, 3))  # 连涨天数下限: -1(不限制), 1-3天
+    buy_up_day_max_range: List[int] = field(default_factory=lambda: [-1] + r(3, 5))  # 连涨天数上限: -1(不限制), 3-5天
+    buy_day3_min_range: List[int] = field(default_factory=lambda: [-1] + r(3, 15, 5))  # 3日涨幅下限%: -1(不限制), 3,5,7,9,11,13,15%
+    buy_day3_max_range: List[int] = field(default_factory=lambda: [-1] + r(10, 30, 5))  # 3日涨幅上限%: -1(不限制), 10,12,14...30%
+    buy_day5_min_range: List[int] = field(default_factory=lambda: [-1] + r(5, 25, 5))  # 5日涨幅下限%: -1(不限制), 5,7,9...25%
+    buy_day5_max_range: List[int] = field(default_factory=lambda: [-1] + r(15, 40, 5))  # 5日涨幅上限%: -1(不限制), 15,17,19...40%
+    change_pct_max_range: List[int] = field(default_factory=lambda: [-1] + r(2, 8, 2))  # 当日涨幅上限%: -1(不限制), 2,4,6,8%
     # 涨停条件已内置固定为0（10天内无涨停），不再作为参数
     # 量比已内置到筛选逻辑中（默认>1），不再作为参数
     # 日内振幅参数已移除（回测证明效果不明显）

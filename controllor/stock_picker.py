@@ -79,42 +79,37 @@ class StockPicker:
             print(f"❌ 没有找到日期 {target_date} 的股票数据")
             return pl.DataFrame()
 
-        # 将numpy数据转换为polars DataFrame
+        # 将PickData对象转换为polars DataFrame（使用属性访问）
         today_stock_df = pl.DataFrame({
-            'code': numpy_data['code'],
-            'open': numpy_data['open'],
-            'close': numpy_data['close'],
-            'high': numpy_data['high'],
-            'low': numpy_data['low'],
-            'volume': numpy_data['volume'],
-            'amount': numpy_data['amount'],
-            'change_pct': numpy_data['change_pct'],
-            'change_3d': numpy_data['change_3d'],
-            'change_5d': numpy_data['change_5d'],
-            'consecutive_up_days': numpy_data['consecutive_up_days'],
-            'limit_up_count_10d': numpy_data['limit_up_count_10d'],
-            'volume_ratio': numpy_data['volume_ratio'],
-            'price_limit_status': numpy_data['price_limit_status']
+            'code': numpy_data.code,
+            'open': numpy_data.open,
+            'close': numpy_data.close,
+            'high': numpy_data.high,
+            'low': numpy_data.low,
+            'volume': numpy_data.volume,
+            'change_pct': numpy_data.change_pct,
+            'change_3d': numpy_data.change_3d,
+            'change_5d': numpy_data.change_5d,
+            'consecutive_up_days': numpy_data.consecutive_up_days,
         })
 
         print(f"📈 全部股票数量: {len(today_stock_df)}")
 
         # 使用策略的筛选函数（传入numpy数组）
+        # 注意：PickData已前置过滤（量比>1且10天0涨停），无需再传这些字段
         buy_params = self.buy_params
         mask = _filter_numba(
             today_stock_df['consecutive_up_days'].to_numpy(),
             today_stock_df['change_3d'].to_numpy(),
             today_stock_df['change_5d'].to_numpy(),
             today_stock_df['change_pct'].to_numpy(),
-            today_stock_df['limit_up_count_10d'].to_numpy(),
-            today_stock_df['volume_ratio'].to_numpy(),
             buy_params[0],  # buy_up_day_min
             buy_params[1],  # buy_up_day_max
             buy_params[2],  # buy_day3_min
             buy_params[3],  # buy_day3_max
             buy_params[4],  # buy_day5_min
             buy_params[5],  # buy_day5_max
-            buy_params[6] if len(buy_params) > 6 else 5  # change_pct_max
+            buy_params[6] if len(buy_params) > 6 else -1  # change_pct_max
         )
         filtered_stocks = today_stock_df.filter(pl.Series(mask))
 
@@ -201,7 +196,7 @@ def main():
         # config = "1|-1,8,18,4,0,1|1|-8,5,11,7" 
         # config = "1|3,7,14,2,-1|0|-10,9,7,3" 
         # config="1|3,-1,7,20,14,25,2|0|-10,5,13,10"
-        config="1|-1,-1,8,15,15,20,2|0|-9,6,6,5"
+        config="1|1,5,9,15,13,23,2|0|-9,6,12,6"
         
     picker = StockPicker(config)
     picker.pick()

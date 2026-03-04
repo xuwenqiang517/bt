@@ -26,28 +26,29 @@ class ResultSchema:
     # Chain层扩展字段
     CHAIN_FIELDS = [
         ("总胜率", str, ""),
+        # 胜率对比
         ("期胜率", str, ""),
         ("年胜率", str, "0%"),
+        # 收益对比
         ("期收益", str, ""),
         ("年收益", str, "0.00%"),
-        ("年交易数", int, 0),
-        ("期max", str, ""),
-        ("期min", str, ""),
-        ("年max", str, ""),
-        ("年min", str, ""),
+        # 资金范围对比
+        ("期范围", str, ""),  # min-max
+        ("年范围", str, ""),  # min-max
         ("年夏普", float, 0.0),
+        ("年交易数", int, 0),
         ("配置", str, ""),
         # 选股信号统计字段
-        ("选股信号数", int, 0),
-        ("1日胜率", str, ""),
-        ("3日胜率", str, ""),
-        ("5日胜率", str, ""),
-        ("1日盈亏比", str, ""),
-        ("3日盈亏比", str, ""),
-        ("5日盈亏比", str, ""),
-        ("1日平均收益", str, ""),
-        ("3日平均收益", str, ""),
-        ("5日平均收益", str, ""),
+        ("选股次数", int, 0),
+        ("1胜", str, ""),
+        ("3胜", str, ""),
+        ("5胜", str, ""),
+        ("1盈亏比", str, ""),
+        ("3盈亏比", str, ""),
+        ("5盈亏比", str, ""),
+        ("1收益", str, ""),
+        ("3收益", str, ""),
+        ("5收益", str, ""),
         # 卖出策略统计字段
         ("止损次数", int, 0),
         ("到期盈利", int, 0),
@@ -128,19 +129,22 @@ class ResultSchema:
             row["总胜率"] = f"{successful_count}/{total_periods}"
             return row
 
+        # 计算期范围 (min-max)
+        期max_val = max([x.期max for x in results])
+        期min_val = min([x.期min for x in results])
+        期范围 = f"{to_wan_str(期min_val)}-{to_wan_str(期max_val)}"
+
         row = {
             "总胜率": f"{successful_count}/{total_periods}",
             "期胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
             "期收益": f"{float(np.mean([x.总收益率 for x in results])) * 100:.1f}%",
-            "期max": to_wan_str(max([x.期max for x in results])),
-            "期min": to_wan_str(min([x.期min for x in results])),
+            "期范围": 期范围,
             "配置": cache_key,
             # 年周期字段默认值（当年周期未执行时）
-            "年收益": "0.0%",
             "年胜率": "0%",
+            "年收益": "0.0%",
+            "年范围": "-",
             "年夏普": 0.0,
-            "年max": "0万",
-            "年min": "0万",
             "年交易数": 0,
             "止损次数": 0,
             "到期盈利": 0,
@@ -150,12 +154,12 @@ class ResultSchema:
 
         # 年周期统计
         if year_result:
+            年范围 = f"{to_wan_str(year_result.期min)}-{to_wan_str(year_result.期max)}"
             row.update({
-                "年收益": f"{float(year_result.总收益率) * 100:.1f}%",
                 "年胜率": f"{int(year_result.胜率 * 100)}%",
+                "年收益": f"{float(year_result.总收益率) * 100:.1f}%",
+                "年范围": 年范围,
                 "年夏普": round(float(year_result.夏普比率), 1),
-                "年max": to_wan_str(year_result.期max),
-                "年min": to_wan_str(year_result.期min),
                 "年交易数": int(year_result.交易次数)
             })
             if hasattr(year_result, '卖出统计'):
