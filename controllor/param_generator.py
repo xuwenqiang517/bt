@@ -88,6 +88,16 @@ class ParamGenerator:
         buy6 = self.buy_day5_max_range[indices[5]]     # 5日涨幅上限
         buy7 = self.change_pct_max_range[indices[6]]   # 当日涨幅上限
 
+        # 参数有效性验证（-1表示不限制，不参与比较）
+        # 连涨天数：min > max 时无效（允许相等，如正好连涨2天）
+        if buy1 != -1 and buy2 != -1 and buy1 > buy2:
+            return None
+        # 3日/5日涨幅：min >= max 时无效（涨幅需要有区间空间）
+        if buy3 != -1 and buy4 != -1 and buy3 >= buy4:
+            return None
+        if buy5 != -1 and buy6 != -1 and buy5 >= buy6:
+            return None
+
         # 选股排序参数（7）
         sort_desc = self.sort_desc_range[indices[7]]
 
@@ -109,9 +119,11 @@ class ParamGenerator:
         }
 
     def get_slice_params(self, start_idx: int, end_idx: int):
-        """获取指定索引范围的参数生成器"""
+        """获取指定索引范围的参数生成器，自动过滤无效参数组合"""
         for i in range(start_idx, min(end_idx, self.total_count)):
-            yield self._index_to_params(i)
+            params = self._index_to_params(i)
+            if params is not None:  # 跳过无效参数组合
+                yield params
 
     def get_worker_slice(self, worker_id: int, total_workers: int):
         """
