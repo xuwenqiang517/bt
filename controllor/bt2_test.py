@@ -72,5 +72,5 @@ if __name__ == "__main__":
     1|-1,-1,8,15,15,20,2|0|-9,6,6,5
     """
 
-    bt_all(processor_count=1, fail_count=20, strategy_params=None, max_strategy_count=100)
+    bt_all(processor_count=1, fail_count=40, strategy_params=None, max_strategy_count=100)
     # bt_all(processor_count=4,fail_count=2,strategy_params=s,max_strategy_count=1000000000)

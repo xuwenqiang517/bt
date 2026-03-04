@@ -1,4 +1,5 @@
 import sys
+from typing import Any
 from stock_calendar import StockCalendar as sc
 from stock_data import StockData as sd
 import polars as pl
@@ -165,9 +166,9 @@ class Strategy:
         self.data = None
         self.calendar = None
         self.debug = debug
-        # 预计算两级缓存参数标识
-        self._filter_key = self._compute_filter_key()
-        self._sort_key = self._compute_sort_key()
+        # 预计算两级缓存参数标识（内联计算，避免函数调用开销）
+        self._filter_key = tuple(self.buy_param_arr)
+        self._sort_key = tuple(self.buy_param_arr + self.pick_param_arr)
         self._init_pick_filter()
         self._init_pick_sorter()
         self.reset()
@@ -245,23 +246,6 @@ class Strategy:
         """添加持仓股票"""
         self.hold.append(hold_stock)
         self.hold_codes.add(hold_stock.code)
-
-    def _remove_hold(self, code: int) -> HoldStock | None:
-        """移除持仓股票"""
-        for i, hold in enumerate(self.hold):
-            if hold.code == code:
-                self.hold.pop(i)
-                self.hold_codes.discard(code)
-                return hold
-        return None
-    
-    def _compute_filter_key(self) -> tuple:
-        """计算筛选参数key（只包含买入参数）"""
-        return tuple(self.buy_param_arr)
-
-    def _compute_sort_key(self) -> tuple:
-        """计算排序参数key（包含买入+选股参数）"""
-        return tuple(self.buy_param_arr + self.pick_param_arr)
 
     def pick(self) -> None:
         """选择符合条件的股票，使用两级缓存优化性能
@@ -450,23 +434,31 @@ class Strategy:
                 print(f"日期 {today} 买入 {code_display} , {buy_price_with_slippage/100:.2f} * {buy_count} = {cost:.2f} (含滑点), 手续费{comm:.2f}, 剩余资金 {free_amount:.2f}")
 
     def sell(self) -> None:
-        is_debug=self.debug
         """执行卖出操作，使用统一的卖出策略"""
+        # 提前绑定属性到局部变量，减少重复查找
+        is_debug = self.debug
+        data = self.data
+        today = self.today
+        slippage_rate = self._slippage_rate
+        commission_rate = self._commission_rate
+        trades_history = self.trades_history
+        sell_stats = self.sell_stats
         hold = self.hold
+        hold_codes = self.hold_codes
+
         hold_length = len(hold)
         if hold_length == 0:
             return
-
-        today = self.today
-        sells_info: list[tuple[int, int, str]] = []
 
         # 统计卖出检查
         if is_debug:
             limit_down_count = 0
             no_data_count = 0
             skip_today_count = 0
+            sell_count = 0
 
-        for i in range(hold_length):
+        # 倒序遍历，可以安全地边遍历边删除
+        for i in range(hold_length - 1, -1, -1):
             hold_stock = hold[i]
             code = hold_stock.code
             buy_day = hold_stock.buy_day
@@ -476,83 +468,78 @@ class Strategy:
                 continue
 
             # 获取股票完整数据，O(1)查询
-            full_data = self.data.get_full_data_by_date_code(today, code)
+            full_data = data.get_full_data_by_date_code(today, code)
             if full_data.close == 0:  # 空数据检查
                 if is_debug:
                     no_data_count += 1
-                    code_display = self.data.get_stock_display(code) if self.data else str(code)
+                    code_display = data.get_stock_display(code) if data else str(code)
                     print(f"日期 {today} 股票 {code_display} 无数据,跳过卖出")
                 continue
 
             if full_data.price_limit_status == 2:
                 if is_debug:
                     limit_down_count += 1
-                    code_display = self.data.get_stock_display(code) if self.data else str(code)
+                    code_display = data.get_stock_display(code) if data else str(code)
                     print(f"日期 {today} 股票 {code_display} 跌停,无法卖出")
                 continue
 
             # 调用统一的卖出策略
-            need_sell, sell_price, log_reason, stat_reason = self._check_sell(hold_stock, full_data)
-            if is_debug:
-                buy_price = hold_stock.buy_price
-                log_reason = f"\033[91m{log_reason}\033[0m" if sell_price > buy_price else f"\033[92m{log_reason}\033[0m"
+            need_sell, sell_price_raw, log_reason, stat_reason = self._check_sell(hold_stock, full_data)
+            if not need_sell:
+                continue
 
-            if need_sell:
-                sells_info.append((code, sell_price, log_reason, stat_reason))
+            # 倒序遍历，直接删除当前元素，不影响未遍历的元素
+            hold_stock = hold.pop(i)
+            hold_codes.discard(code)
+
+            buy_price = hold_stock.buy_price
+            buy_count = hold_stock.buy_count
+
+            if is_debug:
+                sell_count += 1
+                log_reason = f"\033[91m{log_reason}\033[0m" if sell_price_raw > buy_price else f"\033[92m{log_reason}\033[0m"
+
+            # 加入滑点：卖出价格下浮
+            sell_price = int(sell_price_raw * (1 - slippage_rate))
+            # 计算卖出收入
+            sell_revenue = sell_price * buy_count
+            # 计算卖出手续费
+            sell_commission = int(sell_revenue * commission_rate)
+            # 实际到账金额
+            net_revenue = sell_revenue - sell_commission
+            # 计算盈亏
+            cost_cents = buy_price * buy_count
+            profit_cents = net_revenue - cost_cents
+            self.free_amount += net_revenue
+            # 计算盈亏率
+            profit_rate = profit_cents / cost_cents if cost_cents > 0 else 0
+
+            # 统计卖出原因
+            if stat_reason in sell_stats:
+                sell_stats[stat_reason] += 1
+
+            # 记录交易历史
+            trades_history.append(TradeRecord(
+                date=today,
+                code=code,
+                buy_date=hold_stock.buy_day,
+                buy_price=buy_price,
+                sell_price=sell_price,
+                quantity=buy_count,
+                profit=profit_cents,
+                profit_rate=profit_rate,
+                reason=log_reason
+            ))
+
+            if is_debug:
+                free_amount = self.free_amount / 100
+                profit = profit_cents // 100
+                comm = sell_commission // 100
+                code_display = data.get_stock_display(code) if data else str(code)
+                print(f"日期 {today} 卖出 {code_display} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{log_reason} 盈亏 {profit}({profit_rate:.2%}), 手续费{comm}, 剩余资金 {free_amount:.2f}")
 
         if is_debug and hold_length > 0:
-            print(f"日期 {today} 卖出检查: 持仓{hold_length}只|跌停{limit_down_count}只|无数据{no_data_count}只|当日买入{skip_today_count}只|触发卖出{len(sells_info)}只")
-        
-        sells_info_length = len(sells_info)
-        if sells_info_length == 0:
-            return
-        
-        # 批量处理卖出
-        trades_history = self.trades_history
-        for i in range(sells_info_length):
-            code, sell_price_raw, log_reason, stat_reason = sells_info[i]
-            hold_stock = self._remove_hold(code)
-            if hold_stock:
-                buy_price = hold_stock.buy_price
-                buy_count = hold_stock.buy_count
-                # 加入滑点：卖出价格下浮
-                sell_price = int(sell_price_raw * (1 - self._slippage_rate))
-                # 计算卖出收入
-                sell_revenue = sell_price * buy_count
-                # 计算卖出手续费
-                sell_commission = int(sell_revenue * self._commission_rate)
-                # 实际到账金额
-                net_revenue = sell_revenue - sell_commission
-                # 计算盈亏
-                cost_cents = buy_price * buy_count
-                profit_cents = net_revenue - cost_cents
-                self.free_amount += net_revenue
-                # 计算盈亏率
-                profit_rate = profit_cents / cost_cents if cost_cents > 0 else 0
-
-                # 统计卖出原因
-                if stat_reason in self.sell_stats:
-                    self.sell_stats[stat_reason] += 1
-
-                # 记录交易历史
-                trades_history.append({
-                    'date': today,
-                    'code': code,
-                    'buy_date': hold_stock.buy_day,
-                    'buy_price': buy_price,
-                    'sell_price': sell_price,
-                    'quantity': buy_count,
-                    'profit': profit_cents,
-                    'profit_rate': profit_rate,
-                    'reason': log_reason
-                })
-
-                if is_debug:
-                    free_amount = self.free_amount / 100
-                    profit = profit_cents // 100
-                    comm = sell_commission // 100
-                    code_display = self.data.get_stock_display(code) if self.data else str(code)
-                    print(f"日期 {today} 卖出 {code_display} {hold_stock.buy_day}->{today} {buy_price/100:.2f} -> {sell_price/100:.2f} 原因:{log_reason} 盈亏 {profit}({profit_rate:.2%}), 手续费{comm}, 剩余资金 {free_amount:.2f}")
+            print(f"日期 {today} 卖出检查: 持仓{hold_length}只|跌停{limit_down_count}只|无数据{no_data_count}只|当日买入{skip_today_count}只|触发卖出{sell_count}只")
                 
 
     def _check_sell(self, hold: HoldStock, full_data) -> tuple[bool, int, str, str]:
@@ -689,13 +676,13 @@ class Strategy:
         free_amount = self.free_amount
         total_value = hold_amount + free_amount
 
-        # 记录每日资产和持仓明细
-        self.daily_values.append({
-            'date': today,
-            'value': total_value,
-            'free_amount': free_amount,
-            'holdings': daily_holdings
-        })
+        # 记录每日资产和持仓明细 - 使用DailyValue替代dict，减少内存占用
+        self.daily_values.append(DailyValue(
+            date=today,
+            value=total_value,
+            free_amount=free_amount,
+            holdings=daily_holdings
+        ))
 
         if is_debug:
             free_amount_元 = free_amount / 100
@@ -749,18 +736,18 @@ class Strategy:
 
         # 计算胜率
         trade_count = len(trades_history)
-        win_rate = sum(1 for t in trades_history if t['profit'] > 0) / trade_count if trade_count > 0 else 0
+        win_rate = sum(1 for t in trades_history if t.profit > 0) / trade_count if trade_count > 0 else 0
 
         # 计算资金使用率
         avg_utilization = 0
         if daily_values:
-            utilizations = [min(max(0, dv['value'] - dv['free_amount']) / dv['value'], 1.0)
-                           for dv in daily_values if dv['value'] > 0]
+            utilizations = [min(max(0, dv.value - dv.free_amount) / dv.value, 1.0)
+                           for dv in daily_values if dv.value > 0]
             avg_utilization = sum(utilizations) / len(utilizations) if utilizations else 0
 
         # 计算最大资金和最小资金
         if daily_values:
-            values = [dv['value'] for dv in daily_values]
+            values = [dv.value for dv in daily_values]
             max_value = max(values)
             min_value = min(values)
         else:
@@ -769,8 +756,8 @@ class Strategy:
         # 计算夏普比率（仅在需要时计算）
         sharpe_ratio = 0.0
         if calc_sharpe and len(daily_values) > 1:
-            daily_returns = [(daily_values[i]['value'] - daily_values[i-1]['value']) / daily_values[i-1]['value']
-                            for i in range(1, len(daily_values)) if daily_values[i-1]['value'] > 0]
+            daily_returns = [(daily_values[i].value - daily_values[i-1].value) / daily_values[i-1].value
+                            for i in range(1, len(daily_values)) if daily_values[i-1].value > 0]
             if daily_returns:
                 avg_return = sum(daily_returns) / len(daily_returns)
                 std = (sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5

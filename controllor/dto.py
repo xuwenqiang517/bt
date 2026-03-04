@@ -25,36 +25,34 @@ class ResultSchema:
 
     # Chain层扩展字段
     CHAIN_FIELDS = [
-        ("周期胜率", str, ""),
-        ("平均胜率", str, ""),
-        ("平均收益率", str, ""),
-        ("年收益", str, ""),
-        ("年胜率", str, ""),
-        ("平均交易次数", float, 0.0),
-        ("平均资金使用率", str, ""),
-        ("期max", float, 0.0),
-        ("期min", float, 0.0),
-        ("夏普", float, 0.0),
-        ("年夏普", float, 0.0),
+        ("总胜率", str, ""),
+        ("期胜率", str, ""),
+        ("年胜率", str, "0%"),
+        ("期收益", str, ""),
+        ("年收益", str, "0.00%"),
+        ("年交易数", int, 0),
+        ("期max", str, ""),
+        ("期min", str, ""),
         ("年max", str, ""),
         ("年min", str, ""),
-        ("年交易数", int, 0),
-        ("止损数", int, 0),
-        ("到期盈", int, 0),
-        ("到期亏", int, 0),
-        ("回落止盈", int, 0),
+        ("年夏普", float, 0.0),
         ("配置", str, ""),
         # 选股信号统计字段
         ("选股信号数", int, 0),
         ("1日胜率", str, ""),
-        ("1日盈亏比", str, ""),
-        ("1日平均收益", str, ""),
         ("3日胜率", str, ""),
-        ("3日盈亏比", str, ""),
-        ("3日平均收益", str, ""),
         ("5日胜率", str, ""),
+        ("1日盈亏比", str, ""),
+        ("3日盈亏比", str, ""),
         ("5日盈亏比", str, ""),
+        ("1日平均收益", str, ""),
+        ("3日平均收益", str, ""),
         ("5日平均收益", str, ""),
+        # 卖出策略统计字段
+        ("止损次数", int, 0),
+        ("到期盈利", int, 0),
+        ("到期亏损", int, 0),
+        ("回落止盈", int, 0),
     ]
 
     @classmethod
@@ -109,6 +107,8 @@ class ResultSchema:
         for name, dtype, default in cls.CHAIN_FIELDS:
             if name == "配置":
                 result[name] = cache_key
+            elif name == "总胜率":
+                result[name] = "0/0"
             else:
                 result[name] = default() if callable(default) else default
         return result
@@ -118,25 +118,34 @@ class ResultSchema:
                                        total_periods: int, results: list, cache_key: str,
                                        year_result: Any = None) -> Dict[str, Any]:
         """从BacktestResult列表创建Chain层行数据"""
+        # 资金转换为万为单位
+        def to_wan_str(value):
+            """将分转换为万，保留整数，带万字"""
+            return f"{int(value / 1000000)}万"
+
         if not results:
             row = cls.create_empty_chain_row(cache_key)
-            row["周期胜率"] = f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})"
+            row["总胜率"] = f"{successful_count}/{total_periods}"
             return row
 
-        # 辅助函数：转换为万单位字符串
-        def to_wan_str(value):
-            return f"{value/10000:.0f}万" if value >= 10000 else f"{value/100:.0f}"
-
         row = {
-            "周期胜率": f"{int(actual_win_rate * 100)}%({successful_count}/{total_periods})",
-            "平均胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
-            "平均收益率": f"{float(np.mean([x.总收益率 for x in results])) * 100:.2f}%",
-            "平均交易次数": round(float(np.mean([x.交易次数 for x in results])), 1),
-            "平均资金使用率": f"{float(np.mean([x.平均资金使用率 for x in results])) * 100:.2f}%",
-            "期max": float(max([x.期max for x in results])),
-            "期min": float(min([x.期min for x in results])),
-            "夏普": round(float(np.mean([x.夏普比率 for x in results])), 1),
-            "配置": cache_key
+            "总胜率": f"{successful_count}/{total_periods}",
+            "期胜率": f"{int(np.mean([x.胜率 for x in results]) * 100)}%",
+            "期收益": f"{float(np.mean([x.总收益率 for x in results])) * 100:.1f}%",
+            "期max": to_wan_str(max([x.期max for x in results])),
+            "期min": to_wan_str(min([x.期min for x in results])),
+            "配置": cache_key,
+            # 年周期字段默认值（当年周期未执行时）
+            "年收益": "0.0%",
+            "年胜率": "0%",
+            "年夏普": 0.0,
+            "年max": "0万",
+            "年min": "0万",
+            "年交易数": 0,
+            "止损次数": 0,
+            "到期盈利": 0,
+            "到期亏损": 0,
+            "回落止盈": 0
         }
 
         # 年周期统计
@@ -152,9 +161,9 @@ class ResultSchema:
             if hasattr(year_result, '卖出统计'):
                 sell_stats = year_result.卖出统计
                 row.update({
-                    "止损数": int(sell_stats.get('止损', 0)),
-                    "到期盈": int(sell_stats.get('到期盈利', 0)),
-                    "到期亏": int(sell_stats.get('到期亏损', 0)),
+                    "止损次数": int(sell_stats.get('止损', 0)),
+                    "到期盈利": int(sell_stats.get('到期盈利', 0)),
+                    "到期亏损": int(sell_stats.get('到期亏损', 0)),
                     "回落止盈": int(sell_stats.get('回落止盈', 0))
                 })
 
