@@ -453,28 +453,39 @@ class ComprehensivePicker:
 def main():
     """主函数"""
     import sys
-    
+    from stock_calendar import StockCalendar
+    from datetime import datetime
+
+    # 检查今天是否是交易日
+    calendar = StockCalendar()
+    now = datetime.now()
+    today_int = int(now.strftime("%Y%m%d"))
+
+    if today_int not in calendar.date_to_index:
+        print(f"📅 今天 ({today_int}) 不是交易日，跳过选股")
+        return
+
     # 默认股票配置
     # stock_config = "1|1,5,9,15,13,23,2|0|-9,6,12,6"
     stock_config = "1|3,7,8,16,15,23,2|0|-9,6,6,3"
-    
+
     # 如果提供了参数，使用提供的配置
     if len(sys.argv) > 1:
         stock_config = sys.argv[1]
-    
+
     # 创建综合选股器
     picker = ComprehensivePicker(stock_config=stock_config)
-    
+
     # 执行选股
     target_date = None
     if len(sys.argv) > 2:
         target_date = sys.argv[2]
-    
+
     results = picker.pick(target_date)
-    
+
     # 打印摘要
     picker.print_summary(results)
-    
+
     # 发送邮件
     picker.send_email(results)
 
