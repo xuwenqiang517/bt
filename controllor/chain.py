@@ -604,9 +604,9 @@ class Chain:
         for days in [1, 3, 5]:
             profits = stats[days]['profits']
             if not profits:
-                result[f'{days}日胜率'] = ''
-                result[f'{days}日盈亏比'] = ''
-                result[f'{days}日平均收益'] = ''
+                result[f'{days}胜'] = ''
+                result[f'{days}盈亏比'] = ''
+                result[f'{days}收益'] = ''
                 continue
 
             win_count = sum(1 for p in profits if p > 0)
@@ -622,9 +622,9 @@ class Chain:
             avg_loss = sum(loss_profits) / len(loss_profits) if loss_profits else 0
             profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else (float('inf') if avg_win > 0 else 0)
 
-            result[f'{days}日胜率'] = f"{win_rate*100:.1f}%"
-            result[f'{days}日盈亏比'] = f"{profit_loss_ratio:.2f}" if profit_loss_ratio != float('inf') else "∞"
-            result[f'{days}日平均收益'] = f"{avg_profit*100:.2f}%"
+            result[f'{days}胜'] = f"{win_rate*100:.1f}%"
+            result[f'{days}盈亏比'] = f"{profit_loss_ratio:.2f}" if profit_loss_ratio != float('inf') else "∞"
+            result[f'{days}收益'] = f"{avg_profit*100:.2f}%"
 
         return result
 
