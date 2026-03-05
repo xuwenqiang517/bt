@@ -127,8 +127,8 @@ class StockPicker:
             print(f"✅ 选出 {n} 只股票（按成交量升序，冷门股）:\n")
 
             # 显示结果
-            print(f"{'代码':<10} {'收盘':<10} {'连涨':<8} {'3日涨幅':<12} {'5日涨幅':<12} {'当日涨幅':<10}")
-            print("-" * 75)
+            print(f"{'代码':<12} {'名称':<12} {'收盘':<10} {'连涨':<8} {'3日涨幅':<12} {'5日涨幅':<12} {'当日涨幅':<10}")
+            print("-" * 90)
 
             for row in result.iter_rows(named=True):
                 # 处理可能的None值
@@ -139,8 +139,16 @@ class StockPicker:
                 change_5d = row.get('change_5d', 0) or 0
                 change_pct = row.get('change_pct', 0) or 0
                 
-                print(f"{code:<10} {close:<10.2f} {consecutive_up_days:<8} "
-                      f"{change_3d:<12.2f}% {change_5d:<12.2f}% {change_pct:<10.2f}%")
+                # 补全代码为6位
+                code_str = str(code).zfill(6)
+                # 获取股票名称
+                name = self.data.get_stock_name(code)
+                name = name[:10] if len(name) > 10 else name
+                # 价格转换为元（数据库存储单位是分）
+                close_yuan = close / 100
+                
+                print(f"{code_str:<12} {name:<12} {close_yuan:<10.2f} {consecutive_up_days:<8} "
+                      f"{change_3d:>8.2f}%   {change_5d:>8.2f}%   {change_pct:>8.2f}%")
         else:
             result = pl.DataFrame()
             print(f"😢 没有符合条件的股票")
