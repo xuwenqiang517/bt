@@ -104,6 +104,12 @@ class ETFData:
 
         if not force_refresh:
             etf_data = cache.get_pl(all_cache_file_name)
+            # 检查缓存数据是否包含今天
+            if etf_data is not None and not etf_data.is_empty():
+                max_date = etf_data["date"].max()
+                if max_date != int(today):
+                    print(f"   缓存数据最新日期为 {max_date}，需要重新获取 {today} 的数据")
+                    etf_data = None
 
         if etf_data is None:
             print(f"   缓存取 ETF 数据 {all_cache_file_name} 失败，尝试从腾讯接口获取")
@@ -131,7 +137,7 @@ class ETFData:
                             (pl.col("close").cast(pl.Float32) * 100).round(0).cast(pl.Int32).alias("close"),
                             (pl.col("high").cast(pl.Float32) * 100).round(0).cast(pl.Int32).alias("high"),
                             (pl.col("low").cast(pl.Float32) * 100).round(0).cast(pl.Int32).alias("low"),
-                            pl.col("volume").cast(pl.Float32).fill_null(0).cast(pl.Int32).alias("volume")
+                            pl.col("volume").cast(pl.Float64).fill_null(0).cast(pl.Int64).alias("volume")
                         )
                         df = df.select(["code", "date", "open", "close", "high", "low", "volume"])
                         etf_data = pl.concat([etf_data, df])
@@ -146,6 +152,8 @@ class ETFData:
         else:
             print(f"   缓存取 ETF 数据 {all_cache_file_name} 成功")
 
+        # 清理旧的单个ETF缓存，但保留当天的
+        cache.clean(prefix="etf_data_")
         return etf_data
 
     def get_etf_data_akshare(self, code: str) -> pl.DataFrame | None:
@@ -201,7 +209,17 @@ if __name__ == "__main__":
     if len(df) > 0:
         print(df.head())
     print("\n测试按日期和代码获取数据:")
-    df2 = etf.get_data_by_date_code(20250303, 510050)
-    print(f"  记录数: {len(df2)}")
+    # 使用实际存在的ETF代码（如510300沪深300ETF）
+    test_code = 510300
+    df2 = etf.get_data_by_date_code(20250303, test_code)
+    print(f"  ETF {test_code} 记录数: {len(df2)}")
     if len(df2) > 0:
         print(df2)
+    else:
+        # 如果510300不存在，使用第一个可用的ETF代码
+        available_codes = df['code'].unique().sort()
+        if len(available_codes) > 0:
+            first_code = available_codes[0]
+            print(f"  使用第一个可用ETF {first_code}:")
+            df3 = etf.get_data_by_date_code(20250303, first_code)
+            print(df3)

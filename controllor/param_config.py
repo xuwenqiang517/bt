@@ -23,13 +23,13 @@ class ParamRanges:
     hold_count_range: List[int] = field(default_factory=lambda: [1])  # 持仓数量
     
     # 买入参数（7个）- 扩大参数范围，增加多样性
-    buy_up_day_min_range: List[int] = field(default_factory=lambda: [-1] + r(1, 3))  # 连涨天数下限: -1(不限制), 1-3天
-    buy_up_day_max_range: List[int] = field(default_factory=lambda: [-1] + r(3, 5))  # 连涨天数上限: -1(不限制), 3-5天
-    buy_day3_min_range: List[int] = field(default_factory=lambda: [-1] + r(3, 15, 5))  # 3日涨幅下限%: -1(不限制), 3,5,7,9,11,13,15%
-    buy_day3_max_range: List[int] = field(default_factory=lambda: [-1] + r(10, 30, 5))  # 3日涨幅上限%: -1(不限制), 10,12,14...30%
-    buy_day5_min_range: List[int] = field(default_factory=lambda: [-1] + r(5, 25, 5))  # 5日涨幅下限%: -1(不限制), 5,7,9...25%
-    buy_day5_max_range: List[int] = field(default_factory=lambda: [-1] + r(15, 40, 5))  # 5日涨幅上限%: -1(不限制), 15,17,19...40%
-    change_pct_max_range: List[int] = field(default_factory=lambda: [-1] + r(2, 8, 2))  # 当日涨幅上限%: -1(不限制), 2,4,6,8%
+    buy_up_day_min_range: List[int] = field(default_factory=lambda: [3])  # 连涨天数下限: -1(不限制), 1-3天
+    buy_up_day_max_range: List[int] = field(default_factory=lambda: [-1] )  # 连涨天数上限: -1(不限制), 3-5天
+    buy_day3_min_range: List[int] = field(default_factory=lambda: [-1] + r(3, 15, 1))  # 3日涨幅下限%: -1(不限制), 3,5,7,9,11,13,15%
+    buy_day3_max_range: List[int] = field(default_factory=lambda: [-1] + r(10, 30, 1))  # 3日涨幅上限%: -1(不限制), 10,12,14...30%
+    buy_day5_min_range: List[int] = field(default_factory=lambda: [-1] )  # 5日涨幅下限%: -1(不限制), 5,7,9...25%
+    buy_day5_max_range: List[int] = field(default_factory=lambda: [-1] + r(15, 40, 1))  # 5日涨幅上限%: -1(不限制), 15,17,19...40%
+    change_pct_max_range: List[int] = field(default_factory=lambda: [-1] + r(-9, 8, 1))  # 当日涨幅上限%: -1(不限制), 2,4,6,8%
     # 涨停条件已内置固定为0（10天内无涨停），不再作为参数
     # 量比已内置到筛选逻辑中（默认>1），不再作为参数
     # 日内振幅参数已移除（回测证明效果不明显）
@@ -38,10 +38,10 @@ class ParamRanges:
     sort_desc_range: List[int] = field(default_factory=lambda: [0, 1])  # 排序方向, 0=成交量升序(冷门股), 1=成交量降序(热门股)
 
     # 卖出参数（4个）- 扩大参数范围
-    sell_stop_loss_range: List[int] = field(default_factory=lambda: r(-15, -5))  # 止损率%: -15到-5
+    sell_stop_loss_range: List[int] = field(default_factory=lambda: r(-12, -8))  # 止损率%: -15到-5
     sell_hold_days_range: List[int] = field(default_factory=lambda: r(3, 15))  # 持仓天数: 3-15天
-    sell_target_return_range: List[int] = field(default_factory=lambda: r(5, 20, 5))  # 目标涨幅%: 5,7,9...20%
-    sell_trailing_range: List[int] = field(default_factory=lambda: r(2, 20, 4))  # 回撤止盈率%: 2,4,6...20%
+    sell_target_return_range: List[int] = field(default_factory=lambda: r(3, 15, 1))  # 目标涨幅%: 5,7,9...20%
+    sell_trailing_range: List[int] = field(default_factory=lambda: r(2, 10, 1))  # 回撤止盈率%: 2,4,6...20%
     
     # 默认初始资金（分）
     default_init_amount: int = 10000000  # 10万元 = 10000000分
