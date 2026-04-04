@@ -6,20 +6,6 @@ from param_config import parse_strategy_string, build_strategy_string
 # 导入日志配置（会自动重定向 stdout 到文件）
 import logger_config
 
-# """
-#     3|2,10,15|-15,2,8,3
-#     时间周期: 20250101 至 20260101
-#     时间周期: 20250101 至 20260101
-#     资金: 100000.00 - > 314042.00
-#     总收益率: 214.04%
-#     胜率: 44.64%
-#     交易次数: 336
-#     最大资金: 314232.00
-#     最小资金: 91406.00
-#     夏普比率: 2.87
-#     平均资金使用率: 53.00%
-# """
-
 def bt_all(processor_count, fail_count, strategy_params=None, max_strategy_count=1000000000, force_refresh=False):
     from datetime import datetime
     day_array = sc().get_date_arr()
