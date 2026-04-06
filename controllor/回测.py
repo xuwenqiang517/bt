@@ -92,5 +92,3 @@ if __name__ == "__main__":
     # bt_one(s,[[20250101,20260101]])
     # bt_one(s,[[20250101,20260301]])
     
-
-# /Users/JDb/miniconda3/envs/py311/bin/python /Users/JDb/Desktop/github/bt/controllor/bt2.py
