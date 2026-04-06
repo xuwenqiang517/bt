@@ -3,7 +3,7 @@ import akshare as ak
 from local_cache import LocalCache as lc
 import pandas as pd
 
-DEFAULT_START_DATE = 20260101  # 默认回测开始日期
+DEFAULT_START_DATE = 20250101  # 默认回测开始日期
 DEFAULT_END_DATE = 20260401  # 默认回测结束日期
 
 class StockCalendar:

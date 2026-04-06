@@ -110,6 +110,10 @@ class ParamGenerator:
         sell3 = self.sell_target_return_range[indices[11]]
         sell4 = self.sell_trailing_range[indices[12]]
 
+        # 止盈率 > 目标涨幅时无意义（永远触发不了止盈）
+        if sell4 > sell3:
+            return None
+
         return {
             "base_param_arr": [10000000, hold_count],
             "buy_param_arr": [buy1, buy2, buy3, buy4, buy5, buy6, buy7],
