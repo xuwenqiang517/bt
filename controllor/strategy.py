@@ -49,22 +49,17 @@ def _filter_numba(up_days, change_3d, change_5d, change_pct,
 
 
 @njit(cache=True)
-def _calc_buy_counts_numba(codes, next_opens, hold_codes_arr, base_amount):
+def _calc_buy_counts_numba(codes, next_opens, valid_mask, base_amount):
     """Numba JIT 编译的买入股数计算函数 - 固定比例模式
     次日开盘涨停已在数据层前置过滤（通过 next_open/close 计算）
     base_amount: 固定买入金额（分）
+    valid_mask: 已持仓掩码（True表示已持仓跳过），由调用方预处理
     """
     n = len(codes)
     buy_counts = np.zeros(n, dtype=np.int64)
 
     for i in range(n):
-        # 检查是否已持仓
-        already_hold = False
-        for j in range(len(hold_codes_arr)):
-            if codes[i] == hold_codes_arr[j]:
-                already_hold = True
-                break
-        if already_hold:
+        if valid_mask[i]:  # 已持仓跳过
             continue
 
         # 计算股数（100股整数倍）
@@ -399,8 +394,12 @@ class Strategy:
             already_hold = sum(1 for c in codes if c in hold_codes_arr)
             print(f"日期 {today} 买入筛选: 候选{total_candidates}只|已持仓{already_hold}只|剩余{remaining_hold_count}仓位")
 
+        # 预处理已持仓掩码：使用numpy的isin进行O(n)批量查找，替代原来的O(n*m)嵌套循环
+        # np.isin返回True表示"在hold_codes_arr中"（即已持仓，需要跳过）
+        valid_mask = np.isin(codes, hold_codes_arr) if len(hold_codes_arr) > 0 else np.zeros(len(codes), dtype=bool)
+
         # 使用 Numba 计算买入股数（次日开盘涨停已在数据层前置过滤）
-        buy_counts = _calc_buy_counts_numba(codes, next_opens, hold_codes_arr, base_amount)
+        buy_counts = _calc_buy_counts_numba(codes, next_opens, valid_mask, base_amount)
 
         # 过滤有效买入（股数>0）
         valid_mask = buy_counts > 0

@@ -3,6 +3,9 @@ import akshare as ak
 from local_cache import LocalCache as lc
 import pandas as pd
 
+DEFAULT_START_DATE = 20260101  # 默认回测开始日期
+DEFAULT_END_DATE = 20260401  # 默认回测结束日期
+
 class StockCalendar:
     def __init__(self):
         today=date.today().strftime("%Y%m%d")
@@ -113,8 +116,8 @@ class StockCalendar:
         Returns:
             list: [[start_date, end_date], ...]
         """
-        start_date = 20250101
-        end_date = 20260401
+        start_date = DEFAULT_START_DATE
+        end_date = DEFAULT_END_DATE
 
         # 找到起始和结束索引
         start_idx = self.start(start_date)

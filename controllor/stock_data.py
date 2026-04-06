@@ -58,7 +58,7 @@ class StockData:
     def __init__(self, force_refresh=False):
         today = sc().get_last_trade_date()
         cache=lc()
-        print(f"1. 获取股票列表")
+        # print(f"1. 获取股票列表")
         stock_list_df=self.get_stock_list(str(today),cache)
         # 构建股票代码到名称的缓存字典（支持str和int两种key）
         self.code_to_name = {}
@@ -70,9 +70,9 @@ class StockData:
             if code_str.isdigit():
                 self.code_to_name[int(code_str)] = name
         print(f"   已缓存 {len(stock_list_df)} 只股票名称")
-        print(f"2. 获取股票数据")
+        # print(f"2. 获取股票数据")
         stock_data_df=self.get_stock_data_pl(stock_list_df,str(today),cache,force_refresh)
-        print(f"3. 计算技术指标")
+        # print(f"3. 计算技术指标")
         # 按code分组并应用calc_tech_pl
         grouped = stock_data_df.group_by("code")
         processed_dfs = []
@@ -83,9 +83,9 @@ class StockData:
             processed_dfs.append(tech_df)
         # 合并所有处理后的数据
         processed_stock_data_df = pl.concat(processed_dfs)
-        print(f"4. 构建数据索引")
+        # print(f"4. 构建数据索引")
         self.date_df_dict=self.convert(processed_stock_data_df)
-        print(f"5. 构建快速查找索引")
+        # print(f"5. 构建快速查找索引")
         # 统一数据结构：2层 NumPy 结构，支持批量筛选和O(1)精确查询
         # self.date_numpy_dict = {today: {field: np.array, '_code_to_idx': {code: idx}}}
 
