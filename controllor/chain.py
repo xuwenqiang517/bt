@@ -952,7 +952,6 @@ class Chain:
             base_config = [base_arr[1]]
             cache_key = "|".join(",".join(map(str, arr)) for arr in [base_config, params.get('buy_param_arr'), params.get('pick_param_arr'), params.get('sell_param_arr')])
             new_row = self._create_new_row(actual_win_rate, successful_count, total_count, results, cache_key, year_result, pick_signal_stats)
-            print(new_row)
 
             if is_debug:
                 if 'new_row' in locals():

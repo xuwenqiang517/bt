@@ -144,18 +144,18 @@ class StockData:
         grouped = stock_data_df.group_by("date")
 
         # 打印20250701这天的股票数量
-        print("\n📊 20250701股票数量统计:")
-        print("-" * 40)
-        target_date = 20250701
-        group = stock_data_df.filter(pl.col("date") == target_date)
-        count = len(group)
-        print(f"  {target_date}: {count:4d} 只股票")
-        print("-" * 40)
+        # print("\n📊 20250701股票数量统计:")
+        # print("-" * 40)
+        # target_date = 20250701
+        # group = stock_data_df.filter(pl.col("date") == target_date)
+        # count = len(group)
+        # print(f"  {target_date}: {count:4d} 只股票")
+        # print("-" * 40)
 
-        # 打印数据范围信息
-        all_dates = sorted([d[0] if isinstance(d, tuple) else d for d, _ in grouped])
-        print(f"  数据范围: {all_dates[0]} 至 {all_dates[-1]}")
-        print(f"  总交易日: {len(all_dates)} 天\n")
+        # # 打印数据范围信息
+        # all_dates = sorted([d[0] if isinstance(d, tuple) else d for d, _ in grouped])
+        # print(f"  数据范围: {all_dates[0]} 至 {all_dates[-1]}")
+        # print(f"  总交易日: {len(all_dates)} 天\n")
 
         for trade_date, group in grouped:
             if isinstance(trade_date, tuple):
@@ -379,7 +379,8 @@ class StockData:
             # print(f"获取股票数据 {error_code_arr} 失败")
 
         else:
-            print(f"缓存取股票数据 {all_cache_file_name} 成功")
+            # print(f"缓存取股票数据 {all_cache_file_name} 成功")
+            pass
         cache.clean(prefix="stock_data_")
         return stock_data
 

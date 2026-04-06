@@ -113,7 +113,7 @@ class StockCalendar:
         Returns:
             list: [[start_date, end_date], ...]
         """
-        start_date = 20240701
+        start_date = 20250101
         end_date = 20260401
 
         # 找到起始和结束索引
